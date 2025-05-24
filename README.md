@@ -1,19 +1,20 @@
 # UltraPKI Certificate Discovery
 
-A lightweight, daemon-capable certificate discovery and reporting tool written in Go and Python.
+A lightweight, daemon-capable certificate discovery and reporting agent written in Go and Python.
 
-This tool scans all available local IPv4 and optionally IPv6 interfaces for TLS-enabled services (e.g., HTTPS, SMTPS, IMAPS), extracts remote certificates, and sends key metadata (issuer, fingerprint, expiration) via Webhook to a central endpoint. It natively understands both standard TLS handshakes and STARTTLS upgrades (e.g., on port 587 for SMTP).
+This tool acts as an **auto-discovery agent** that scans your entire local IPv4 and (optionally) IPv6 network for TLS-enabled services. It automatically identifies neighbors on the network and inspects known ports for certificates. In addition to dynamic discovery, it also supports scanning explicitly configured static IP addresses and hostnames.
+
+For every discovered service, the agent extracts TLS certificate metadata (issuer, fingerprint, expiration) and sends the result to a central Webhook endpoint. It supports both traditional TLS handshakes and STARTTLS upgrades (e.g., SMTP on port 587).
 
 ## Features
 
-* IPv4 and optional IPv6 scanning
+* Automatic discovery of network neighbors over IPv4 and optionally IPv6
+* Static IP and hostname support with optional per-host port override
 * Hostname resolution (A and AAAA records)
 * SNI-aware TLS support for accurate certificate retrieval
-* Port override per static host (`host:port`)
 * Periodic background scanning (daemon mode)
 * Webhook delivery with JSON and base64-encoded certificates
 * Configurable port list and scan throttle
-* Static host support (IP addresses or domain names)
 * PID file and optional log file output
 * Configurable debug logging
 * Graceful shutdown via SIGINT or SIGTERM
