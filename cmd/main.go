@@ -91,29 +91,56 @@ func main() {
 
 			host, portStr, err := net.SplitHostPort(hostEntry)
 			if err != nil {
-				// Kein Port spezifiziert → hostEntry als Hostnamen/IP behandeln
-				logutil.DebugLog("Scanning static host: %s (all ports)", hostEntry)
-				scanner.ResolveAndScan(hostEntry, cfg.Ports, cfg.WebhookURL, cfg.EnableIPv6Discovery)
+				// No port specified → hostEntry is either hostname or IP, check what it is
+				ip := net.ParseIP(hostEntry)
+				if ip != nil {
+					if ip.To4() == nil && !cfg.EnableIPv6Discovery {
+						logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", hostEntry)
+						continue
+					}
+					logutil.DebugLog("Scanning static IP: %s (all ports)", hostEntry)
+					scanner.ScanAndSend(hostEntry, hostEntry, cfg.Ports, cfg.WebhookURL)
+				} else {
+					logutil.DebugLog("Scanning static hostname: %s (all ports)", hostEntry)
+					scanner.ResolveAndScan(hostEntry, cfg.Ports, cfg.WebhookURL, cfg.EnableIPv6Discovery)
+				}
 				scanned[hostEntry] = true
 				time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
 				continue
 			}
 
-			// Host:Port – nur diesen Port scannen
+			// host:port case → parse IP or resolve hostname first
 			port, err := strconv.Atoi(portStr)
 			if err != nil {
-				log.Printf("⚠️  Invalid port in static_hosts: %s", hostEntry)
+				logutil.ErrorLog("⚠️  Invalid port in static_hosts: %s", hostEntry)
 				continue
 			}
 
 			ip := net.ParseIP(host)
-			if ip != nil && ip.To4() == nil && !cfg.EnableIPv6Discovery {
-				logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", host)
-				continue
+			if ip != nil {
+				if ip.To4() == nil && !cfg.EnableIPv6Discovery {
+					logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", host)
+					continue
+				}
+				logutil.DebugLog("Scanning static IP: %s (port %d only)", host, port)
+				scanner.ScanAndSend(ip.String(), host, []int{port}, cfg.WebhookURL)
+			} else {
+				// hostname with port → resolve
+				logutil.DebugLog("Resolving static hostname: %s (port %d only)", host, port)
+				ips, err := net.LookupIP(host)
+				if err != nil || len(ips) == 0 {
+					logutil.ErrorLog("Failed to resolve hostname %s: %v", host, err)
+					continue
+				}
+				for _, ip := range ips {
+					if ip.To4() == nil && !cfg.EnableIPv6Discovery {
+						logutil.DebugLog("Skipping resolved IPv6 address %s (IPv6 disabled)", ip)
+						continue
+					}
+					logutil.DebugLog("Scanning resolved IP: %s for hostname %s (port %d)", ip, host, port)
+					scanner.ScanAndSend(ip.String(), host, []int{port}, cfg.WebhookURL)
+				}
 			}
-
-			logutil.DebugLog("Scanning static host: %s (port %d only)", host, port)
-			scanner.ScanAndSend(host, host, []int{port}, cfg.WebhookURL)
 			scanned[hostEntry] = true
 			time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
 		}

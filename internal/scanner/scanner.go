@@ -35,19 +35,25 @@ func ScanAndSend(ip, hostname string, ports []int, webhookURL string) {
 	for _, port := range ports {
 
 		if port == 587 { // Special case for SMTP with STARTTLS
+			// Debug output for ip, hostname
+			logutil.DebugLog("Scanning %s|%s:%d for STARTTLS", ip, hostname, port)
 			result, err := scanSMTPStartTLS(ip, hostname, port)
 			if err != nil {
 				logutil.DebugLog("STARTTLS scan failed: %v", err)
-				return
+				continue
 			}
+			// Debug output for successful scan
+			logutil.DebugLog("STARTTLS scan successful for %s:%d", ip, port)
+			// Debug output result
+			logutil.DebugLog("Certificate for %s:%d: %w", ip, port, result)
 			sendToWebhook([]ScanResult{*result}, webhookURL)
-			return
+			continue
 		}
 
 		// For other ports, use TLS directly
 
 		address := fmt.Sprintf("[%s]:%d", ip, port)
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		dialer := &net.Dialer{Timeout: time.Second}
 
 		conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
 			InsecureSkipVerify: true,
@@ -120,6 +126,7 @@ func ResolveAndScan(host string, ports []int, webhookURL string, enableIPv6 bool
 			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
 			return
 		}
+		logutil.DebugLog("Scanning resolved IP 2: %s", ip.String())
 		ScanAndSend(ip.String(), host, ports, webhookURL)
 		return
 	}
@@ -136,6 +143,8 @@ func ResolveAndScan(host string, ports []int, webhookURL string, enableIPv6 bool
 			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
 			continue
 		}
+		// Debug output for each resolved IP
+		logutil.DebugLog("Scanning resolved IP 1: %s", ip.String())
 		ScanAndSend(ip.String(), host, ports, webhookURL)
 	}
 }
@@ -203,7 +212,7 @@ func DiscoverIPv6Neighbors(ifaceName string) ([]string, error) {
 
 func scanSMTPStartTLS(ip, hostname string, port int) (*ScanResult, error) {
 	address := fmt.Sprintf("%s:%d", ip, port)
-	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+	conn, err := net.DialTimeout("tcp", address, time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("tcp dial failed: %w", err)
 	}
