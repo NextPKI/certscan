@@ -1,6 +1,6 @@
 # config/config.yaml
 
-webhook_url: "http://localhost:8000/webhook"  # Seee ./server/test-webhook-server.sh
+webhook_url: "http://localhost:8000/webhook"  # See ./server/test-webhook-server.sh
 scan_interval_seconds: 30                     # Scan and send every 30 seconds
 scan_throttle_delay_ms: 50                    # Delay between each individual scan (IPv4, IPv6, static)
 enable_ipv6_discovery: true
