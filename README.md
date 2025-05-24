@@ -1,4 +1,4 @@
-# Certificate Discovery
+# UltraPKI Certificate Discovery
 
 A lightweight, daemon-capable certificate discovery and reporting tool written in Go and Python.
 
