@@ -1,10 +1,10 @@
 # config/config.yaml
 
-webhook_url: "http://localhost:8000/webhook"
-scan_interval_seconds: 30      # Scan and send every 30 seconds
-scan_throttle_delay_ms: 50     # Delay between each individual scan (IPv4, IPv6, static)
-enable_ipv6_discovery: false
-debug: false
+webhook_url: "http://localhost:8000/webhook"  # Seee ./server/test-webhook-server.sh
+scan_interval_seconds: 30                     # Scan and send every 30 seconds
+scan_throttle_delay_ms: 50                    # Delay between each individual scan (IPv4, IPv6, static)
+enable_ipv6_discovery: true
+debug: true
 
 ports:
   - 443   # HTTPS
@@ -18,4 +18,4 @@ static_hosts:
   - 127.0.0.1
   - localhost:4433
   - smtp.gmail.com:587
-
+  - 2606:4700::6810:85e5:443
