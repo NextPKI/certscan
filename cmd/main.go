@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -83,13 +84,38 @@ func main() {
 		scanned := make(map[string]bool)
 
 		// Static Hosts
-		for _, ip := range cfg.StaticHosts {
-			if !scanned[ip] {
-				logutil.DebugLog("[debug] Scanning static host: %s\n", ip)
-				scanner.ScanAndSend(ip, cfg.Ports, cfg.WebhookURL)
-				scanned[ip] = true
-				time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
+		for _, hostEntry := range cfg.StaticHosts {
+			if scanned[hostEntry] {
+				continue
 			}
+
+			host, portStr, err := net.SplitHostPort(hostEntry)
+			if err != nil {
+				// Kein Port spezifiziert → hostEntry als Hostnamen/IP behandeln
+				logutil.DebugLog("Scanning static host: %s (all ports)", hostEntry)
+				scanner.ResolveAndScan(hostEntry, cfg.Ports, cfg.WebhookURL, cfg.EnableIPv6Discovery)
+				scanned[hostEntry] = true
+				time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
+				continue
+			}
+
+			// Host:Port – nur diesen Port scannen
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				log.Printf("⚠️  Invalid port in static_hosts: %s", hostEntry)
+				continue
+			}
+
+			ip := net.ParseIP(host)
+			if ip != nil && ip.To4() == nil && !cfg.EnableIPv6Discovery {
+				logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", host)
+				continue
+			}
+
+			logutil.DebugLog("Scanning static host: %s (port %d only)", host, port)
+			scanner.ScanAndSend(host, host, []int{port}, cfg.WebhookURL)
+			scanned[hostEntry] = true
+			time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
 		}
 
 		// IPv4 Interfaces
@@ -108,7 +134,7 @@ func main() {
 				ipStr := ip.String()
 				if ip.To4() != nil && !scanned[ipStr] {
 					logutil.DebugLog("[debug] Scanning interface IP: %s\n", ipStr)
-					scanner.ScanAndSend(ipStr, cfg.Ports, cfg.WebhookURL)
+					scanner.ScanAndSend(ipStr, ipStr, cfg.Ports, cfg.WebhookURL)
 					scanned[ipStr] = true
 					time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
 				}
@@ -126,7 +152,7 @@ func main() {
 				for _, ip := range responders {
 					if !scanned[ip] {
 						logutil.DebugLog("[debug] Scanning discovered IPv6 neighbor: %s\n", ip)
-						scanner.ScanAndSend(ip, cfg.Ports, cfg.WebhookURL)
+						scanner.ScanAndSend(ip, ip, cfg.Ports, cfg.WebhookURL)
 						scanned[ip] = true
 						time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
 					}

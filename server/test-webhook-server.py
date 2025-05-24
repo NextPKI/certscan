@@ -31,10 +31,12 @@ class WebhookHandler(http.server.BaseHTTPRequestHandler):
                     fingerprint = cert.fingerprint(hashes.SHA256()).hex()
                     issuer = cert.issuer.rfc4514_string()
                     serial = hex(cert.serial_number)
-                    not_before = cert.not_valid_before
-                    not_after = cert.not_valid_after
+                    not_before = cert.not_valid_before_utc
+                    not_after = cert.not_valid_after_utc
 
                     print(f"🔒 Certificate for {entry['ip']}:{entry['port']}")
+                    if 'hostname' in entry:
+                        print(f"    ➤ Hostname:   {entry['hostname']}")
                     print(f"    ➤ Serial:     {serial}")
                     print(f"    ➤ Fingerprint: {fingerprint[:64]}")
                     print(f"    ➤ Valid From:  {not_before}")

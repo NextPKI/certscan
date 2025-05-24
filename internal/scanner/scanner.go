@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"encoding/base64"
@@ -8,10 +9,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/ultrapki/certscan/internal/logutil"
-
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv6"
 )
@@ -19,25 +21,41 @@ import (
 type ScanResult struct {
 	IP        string `json:"ip"`
 	Port      int    `json:"port"`
+	Hostname  string `json:"hostname,omitempty"`
 	CertPEM   string `json:"cert_pem"`
 	NotBefore int64  `json:"not_before"`
 	NotAfter  int64  `json:"not_after"`
 	Timestamp int64  `json:"timestamp"`
 }
 
-func ScanAndSend(ip string, ports []int, webhookURL string) {
+// ScanAndSend tries to connect to IP:port and collect certificate data
+func ScanAndSend(ip, hostname string, ports []int, webhookURL string) {
 	var results []ScanResult
+
 	for _, port := range ports {
-		address := fmt.Sprintf("[%s]:%d", ip, port)
-		dialer := &net.Dialer{
-			Timeout: 5 * time.Second,
+
+		if port == 587 { // Special case for SMTP with STARTTLS
+			result, err := scanSMTPStartTLS(ip, hostname, port)
+			if err != nil {
+				logutil.DebugLog("STARTTLS scan failed: %v", err)
+				return
+			}
+			sendToWebhook([]ScanResult{*result}, webhookURL)
+			return
 		}
+
+		// For other ports, use TLS directly
+
+		address := fmt.Sprintf("[%s]:%d", ip, port)
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
 
 		conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
 			InsecureSkipVerify: true,
+			ServerName:         hostname,
 		})
+
 		if err != nil {
-			logutil.DebugLog("[debug] Unable to connect to %s: %v", address, err)
+			logutil.DebugLog("Unable to connect to %s: %v", address, err)
 			continue
 		}
 
@@ -51,6 +69,7 @@ func ScanAndSend(ip string, ports []int, webhookURL string) {
 		result := ScanResult{
 			IP:        ip,
 			Port:      port,
+			Hostname:  hostname,
 			CertPEM:   base64.StdEncoding.EncodeToString(cert.Raw),
 			NotBefore: cert.NotBefore.Unix(),
 			NotAfter:  cert.NotAfter.Unix(),
@@ -80,7 +99,7 @@ func sendToWebhook(results []ScanResult, url string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		logutil.ErrorLog("Webhook request failed: %v", err)
@@ -93,18 +112,47 @@ func sendToWebhook(results []ScanResult, url string) {
 	}
 }
 
-// DiscoverIPv6Neighbors sends ICMPv6 Echo to ff02::1 and collects responders
+// ResolveAndScan resolves a hostname (or IP string) and scans each IP
+func ResolveAndScan(host string, ports []int, webhookURL string, enableIPv6 bool) {
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.To4() == nil && !enableIPv6 {
+			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
+			return
+		}
+		ScanAndSend(ip.String(), host, ports, webhookURL)
+		return
+	}
+
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		logutil.ErrorLog("Could not resolve %s: %v", host, err)
+		return
+	}
+
+	logutil.DebugLog("Resolved %s → %v", host, ips)
+	for _, ip := range ips {
+		if ip.To4() == nil && !enableIPv6 {
+			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
+			continue
+		}
+		ScanAndSend(ip.String(), host, ports, webhookURL)
+	}
+}
+
+// DiscoverIPv6Neighbors sends an ICMPv6 multicast echo to ff02::1 on the given interface
+// and returns a list of responding IP addresses (as strings).
 func DiscoverIPv6Neighbors(ifaceName string) ([]string, error) {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("interface not found: %w", err)
 	}
 
-	c, err := icmp.ListenPacket("udp6", fmt.Sprintf("%%%s", iface.Name))
+	conn, err := icmp.ListenPacket("udp6", fmt.Sprintf("%%%s", iface.Name))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to listen for ICMPv6: %w", err)
 	}
-	defer c.Close()
+	defer conn.Close()
 
 	dst := &net.UDPAddr{
 		IP:   net.ParseIP("ff02::1"),
@@ -115,27 +163,27 @@ func DiscoverIPv6Neighbors(ifaceName string) ([]string, error) {
 		Type: ipv6.ICMPTypeEchoRequest,
 		Code: 0,
 		Body: &icmp.Echo{
-			ID:   1,
+			ID:   os.Getpid() & 0xffff,
 			Seq:  1,
-			Data: []byte("discover"),
+			Data: []byte("certscan"),
 		},
 	}
 
-	b, err := echo.Marshal(nil)
+	msgBytes, err := echo.Marshal(nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal echo request: %w", err)
 	}
 
-	if _, err := c.WriteTo(b, dst); err != nil {
-		return nil, err
+	if _, err := conn.WriteTo(msgBytes, dst); err != nil {
+		return nil, fmt.Errorf("failed to send echo request: %w", err)
 	}
 
-	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 
 	var responders []string
 	for {
 		buf := make([]byte, 1500)
-		n, peer, err := c.ReadFrom(buf)
+		n, peer, err := conn.ReadFrom(buf)
 		if err != nil {
 			break // timeout or done
 		}
@@ -146,9 +194,79 @@ func DiscoverIPv6Neighbors(ifaceName string) ([]string, error) {
 		}
 
 		if msg.Type == ipv6.ICMPTypeEchoReply {
-			responders = append(responders, peer.String())
+			responders = append(responders, peer.(*net.UDPAddr).IP.String())
 		}
 	}
 
 	return responders, nil
+}
+
+func scanSMTPStartTLS(ip, hostname string, port int) (*ScanResult, error) {
+	address := fmt.Sprintf("%s:%d", ip, port)
+	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("tcp dial failed: %w", err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	_, err = reader.ReadString('\n') // read greeting
+	if err != nil {
+		return nil, fmt.Errorf("smtp greeting failed: %w", err)
+	}
+
+	fmt.Fprintf(conn, "EHLO certscan\r\n")
+	lines := []string{}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("EHLO read failed: %w", err)
+		}
+		lines = append(lines, line)
+		if !strings.HasPrefix(line, "250-") {
+			break
+		}
+	}
+
+	supportsStartTLS := false
+	for _, l := range lines {
+		if strings.Contains(strings.ToUpper(l), "STARTTLS") {
+			supportsStartTLS = true
+			break
+		}
+	}
+	if !supportsStartTLS {
+		return nil, fmt.Errorf("STARTTLS not supported on %s", ip)
+	}
+
+	fmt.Fprintf(conn, "STARTTLS\r\n")
+	line, err := reader.ReadString('\n')
+	if err != nil || !strings.HasPrefix(line, "220") {
+		return nil, fmt.Errorf("STARTTLS failed: %v", line)
+	}
+
+	// Upgrade connection
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName:         hostname,
+		InsecureSkipVerify: true,
+	})
+	err = tlsConn.Handshake()
+	if err != nil {
+		return nil, fmt.Errorf("TLS handshake failed: %w", err)
+	}
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return nil, fmt.Errorf("no cert returned")
+	}
+	cert := state.PeerCertificates[0]
+
+	return &ScanResult{
+		IP:        ip,
+		Port:      port,
+		Hostname:  hostname,
+		CertPEM:   base64.StdEncoding.EncodeToString(cert.Raw),
+		NotBefore: cert.NotBefore.Unix(),
+		NotAfter:  cert.NotAfter.Unix(),
+		Timestamp: time.Now().Unix(),
+	}, nil
 }

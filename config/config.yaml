@@ -4,16 +4,18 @@ webhook_url: "http://localhost:8000/webhook"
 scan_interval_seconds: 30      # Scan and send every 30 seconds
 scan_throttle_delay_ms: 50     # Delay between each individual scan (IPv4, IPv6, static)
 enable_ipv6_discovery: false
-debug: false
+debug: true
 
 ports:
   - 443   # HTTPS
-  - 4433  # HTTPS (local test server)
   - 465   # SMTPS
   - 587   # Submission TLS
   - 993   # IMAPS
   - 995   # POP3S
   - 8443  # Alternative HTTPS
+
 static_hosts:
   - 127.0.0.1
-  - localhost
+  - localhost:4433
+  - smtp.gmail.com:587
+
