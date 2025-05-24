@@ -1,4 +1,4 @@
-# UltraPKI Certificate Discovery
+# Certificate Discovery
 
 A lightweight, daemon-capable certificate discovery and reporting tool written in Go and Python.
 
@@ -43,6 +43,24 @@ static_hosts:
   - 127.0.0.1
   - localhost
 ```
+
+---
+
+## Building the Tool
+
+You can build the binary using:
+
+```bash
+make
+```
+
+Or rebuild it cleanly:
+
+```bash
+make remake
+```
+
+The compiled binary will be named `certscan` and placed in the current directory.
 
 ---
 
