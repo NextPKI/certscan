@@ -1,0 +1,12 @@
+[Unit]
+Description=UltraPKI Certificate Discovery Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/certscan --daemon --config=/etc/certscan/config.yaml --logfile=/var/log/certscan.log --pidfile=/var/run/certscan.pid
+Restart=on-failure
+User=certscan
+Group=certscan
+
+[Install]
+WantedBy=multi-user.target
