@@ -1,0 +1,30 @@
+# Your custom webhook:
+#webhook_url: "http://localhost:5173/webhook"
+
+# If you want to use UltraPKI's dashboard:
+#webhook_url: "https://cd.ultrapki.com/webhook"
+#ultrapki_token: ""
+#   Run this command to get a UltraPKI token:
+#   curl -sSf https://cd.ultrapki.com/sh | sh
+
+# Scan and send every 30 seconds
+scan_interval_seconds: 30
+# Delay between each individual scan (IPv4, IPv6, static)
+scan_throttle_delay_ms: 50
+# Enables IPv6
+enable_ipv6_discovery: false
+# Enable debug logging
+debug: true
+
+ports:
+  - 443   # HTTPS
+  - 465   # SMTPS (legacy)
+  - 587   # SMTP (submission)
+  - 993   # IMAPS
+  - 995   # POP3S
+
+static_hosts:
+  - 127.0.0.1
+  - localhost:4433
+  - smtp.gmail.com
+  - 2606:4700::6810:85e5:443

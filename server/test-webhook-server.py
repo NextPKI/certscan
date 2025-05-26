@@ -3,14 +3,13 @@ import http.server
 import socketserver
 import json
 import base64
-import hashlib
 import signal
-import sys
 import threading
 import http.client
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
+from cryptography.x509.oid import ExtensionOID
 
 PORT = 8000
 
@@ -20,29 +19,45 @@ class WebhookHandler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(content_length).decode('utf-8')
 
         try:
-            data = json.loads(body)
-            print("\n📥 Webhook received (%d certificates):" % len(data))
+            payload = json.loads(body)
+            primary_ip = payload.get("primary_ip", "unknown-primary-ip")
+            machine_id = payload.get("machine_id", "unknown-machine-id")
+            data = payload.get("scan_results", [])
+
+            print("\n📥 Webhook received from %s/%s (%d certificates):" % (primary_ip, machine_id, len(data)))
 
             for entry in data:
                 try:
-                    der = base64.b64decode(entry["cert_pem"])
-                    cert = x509.load_der_x509_certificate(der, backend=default_backend())
+                    certificates = entry.get("certificates", [])
+                    print(f"🔒 Certificates for {entry['ip']}:{entry['port']}")
+                    for cert in certificates:
+                        der = base64.b64decode(cert)
+                        cert = x509.load_der_x509_certificate(der, backend=default_backend())
 
-                    fingerprint = cert.fingerprint(hashes.SHA256()).hex()
-                    issuer = cert.issuer.rfc4514_string()
-                    serial = hex(cert.serial_number)
-                    not_before = cert.not_valid_before_utc
-                    not_after = cert.not_valid_after_utc
+                        # Uncomment the following lines if you want to skip CA certificates
+                        # This is optional and can be used to filter out CA certificates
 
-                    print(f"🔒 Certificate for {entry['ip']}:{entry['port']}")
-                    if 'hostname' in entry:
-                        print(f"    ➤ Hostname:   {entry['hostname']}")
-                    print(f"    ➤ Serial:     {serial}")
-                    print(f"    ➤ Fingerprint: {fingerprint[:64]}")
-                    print(f"    ➤ Valid From:  {not_before}")
-                    print(f"    ➤ Valid Until: {not_after}")
-                    print(f"    ➤ Issuer:      {issuer}")
-                    print("")
+                        try:
+                            bc = cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS).value
+                            if bc.ca:
+                                continue  # Skip CA certs
+                        except x509.ExtensionNotFound:
+                            pass  # If extension not found, assume it's a leaf cert
+
+                        fingerprint = cert.fingerprint(hashes.SHA256()).hex()
+                        issuer = cert.issuer.rfc4514_string()
+                        serial = hex(cert.serial_number)
+                        not_before = cert.not_valid_before_utc
+                        not_after = cert.not_valid_after_utc
+
+                        if 'hostname' in entry:
+                            print(f"    ➤ Hostname:   {entry['hostname']}")
+                        print(f"    ➤ Serial:     {serial}")
+                        print(f"    ➤ Fingerprint: {fingerprint[:64]}")
+                        print(f"    ➤ Valid From:  {not_before}")
+                        print(f"    ➤ Valid Until: {not_after}")
+                        print(f"    ➤ Issuer:      {issuer}")
+                        print("")
 
                 except Exception as cert_err:
                     print(f"⚠️  Error parsing cert from {entry.get('ip')}:{entry.get('port')}: {cert_err}")

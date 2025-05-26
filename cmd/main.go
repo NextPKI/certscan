@@ -12,9 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ultrapki/certscan/config"
+	"github.com/ultrapki/certscan/internal/config"
 	"github.com/ultrapki/certscan/internal/logutil"
 	"github.com/ultrapki/certscan/internal/scanner"
+	"github.com/ultrapki/certscan/internal/shared"
 )
 
 func writePIDFile(path string) {
@@ -59,10 +60,19 @@ func parseStaticHostEntry(entry string) (string, string, bool, error) {
 	return entry, "", false, nil
 }
 
+func incIP(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] != 0 {
+			break
+		}
+	}
+}
+
 func main() {
 
 	normalizeFlags()
-	configPath := flag.String("config", "config/config.yaml", "Path to configuration file")
+	configPath := flag.String("config", "config.yaml", "Path to configuration file")
 	daemonMode := flag.Bool("daemon", false, "Run as background daemon")
 	logFile := flag.String("logfile", "", "Optional: path to log file")
 	pidFile := flag.String("pidfile", "", "Optional: path to PID file")
@@ -86,6 +96,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	shared.Config = cfg
+
 	logutil.DebugEnabled = cfg.Debug
 
 	logutil.DebugLog("🚀 Certificate Discovery started")
@@ -101,7 +113,6 @@ func main() {
 	for {
 		scanned := make(map[string]bool)
 
-		// Static Hosts
 		// Static Hosts
 		for _, hostEntry := range cfg.StaticHosts {
 			if scanned[hostEntry] {
@@ -124,10 +135,10 @@ func main() {
 				if hasPort {
 					portNum, _ := strconv.Atoi(port)
 					logutil.DebugLog("Scanning static IP: %s (port %d only)", host, portNum)
-					scanner.ScanAndSend(ip.String(), host, []int{portNum}, cfg.WebhookURL)
+					scanner.ScanAndSend(ip.String(), host, []int{portNum})
 				} else {
 					logutil.DebugLog("Scanning static IP: %s (all ports)", host)
-					scanner.ScanAndSend(ip.String(), host, cfg.Ports, cfg.WebhookURL)
+					scanner.ScanAndSend(ip.String(), host, cfg.Ports)
 				}
 				scanned[hostEntry] = true
 				time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
@@ -149,11 +160,11 @@ func main() {
 						continue
 					}
 					logutil.DebugLog("Scanning resolved IP: %s for hostname %s (port %d)", ip, host, portNum)
-					scanner.ScanAndSend(ip.String(), host, []int{portNum}, cfg.WebhookURL)
+					scanner.ScanAndSend(ip.String(), host, []int{portNum})
 				}
 			} else {
 				logutil.DebugLog("Scanning static hostname: %s (all ports)", host)
-				scanner.ResolveAndScan(host, cfg.Ports, cfg.WebhookURL, cfg.EnableIPv6Discovery)
+				scanner.ResolveAndScan(host, cfg.Ports)
 			}
 
 			scanned[hostEntry] = true
@@ -169,16 +180,40 @@ func main() {
 		for _, iface := range interfaces {
 			addrs, _ := iface.Addrs()
 			for _, addr := range addrs {
-				ip, _, err := net.ParseCIDR(addr.String())
-				if err != nil {
+				ip, ipnet, err := net.ParseCIDR(addr.String())
+				if err != nil || ip.To4() == nil {
 					continue
 				}
-				ipStr := ip.String()
-				if ip.To4() != nil && !scanned[ipStr] {
-					logutil.DebugLog("[debug] Scanning interface IP: %s\n", ipStr)
-					scanner.ScanAndSend(ipStr, ipStr, cfg.Ports, cfg.WebhookURL)
-					scanned[ipStr] = true
-					time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
+
+				// Skip 127.0.0.0/8 networks
+				if ip.IsLoopback() || ipnet.IP.IsLoopback() {
+					logutil.DebugLog("[cidr] Skipping loopback network: %s", ipnet.String())
+					continue
+				}
+
+				// 🎯 Calculate broadcast IP
+				broadcast := make(net.IP, len(ipnet.IP.To4()))
+				for i := 0; i < len(ipnet.IP.To4()); i++ {
+					broadcast[i] = ipnet.IP[i] | ^ipnet.Mask[i]
+				}
+				broadcastStr := broadcast.String()
+
+				// Scan all IPs in range (excluding broadcast)
+				for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
+					ipCopy := net.ParseIP(ip.String())
+					ipStr := ipCopy.String()
+
+					if ipStr == broadcastStr {
+						logutil.DebugLog("[cidr] Skipping broadcast IP: %s", ipStr)
+						continue
+					}
+
+					if !scanned[ipStr] {
+						logutil.DebugLog("[cidr] Scanning IP %s on ports %v", ipStr, cfg.Ports)
+						scanner.ScanAndSend(ipStr, ipStr, cfg.Ports)
+						scanned[ipStr] = true
+						time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
+					}
 				}
 			}
 		}
@@ -194,7 +229,7 @@ func main() {
 				for _, ip := range responders {
 					if !scanned[ip] {
 						logutil.DebugLog("[debug] Scanning discovered IPv6 neighbor: %s\n", ip)
-						scanner.ScanAndSend(ip, ip, cfg.Ports, cfg.WebhookURL)
+						scanner.ScanAndSend(ip, ip, cfg.Ports)
 						scanned[ip] = true
 						time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
 					}

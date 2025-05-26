@@ -3,6 +3,7 @@ package scanner
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -14,23 +15,29 @@ import (
 	"time"
 
 	"github.com/ultrapki/certscan/internal/logutil"
+	"github.com/ultrapki/certscan/internal/shared"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv6"
 )
 
+type Payload struct {
+	PrimaryIP   string       `json:"primary_ip,omitempty"`
+	MachineID   string       `json:"machine_id,omitempty"`
+	ScanResults []ScanResult `json:"scan_results"`
+}
+
 type ScanResult struct {
-	IP        string `json:"ip"`
-	Port      int    `json:"port"`
-	Hostname  string `json:"hostname,omitempty"`
-	CertPEM   string `json:"cert_pem"`
-	NotBefore int64  `json:"not_before"`
-	NotAfter  int64  `json:"not_after"`
-	Timestamp int64  `json:"timestamp"`
+	IP           string   `json:"ip"`
+	Port         int      `json:"port"`
+	Hostname     string   `json:"hostname,omitempty"`
+	Certificates []string `json:"certificates,omitempty"`
+	Timestamp    int64    `json:"timestamp"`
 }
 
 // ScanAndSend tries to connect to IP:port and collect certificate data
-func ScanAndSend(ip, hostname string, ports []int, webhookURL string) {
+func ScanAndSend(ip, hostname string, ports []int) {
 	var results []ScanResult
+	webhookURL := shared.Config.WebhookURL
 
 	for _, port := range ports {
 
@@ -71,15 +78,19 @@ func ScanAndSend(ip, hostname string, ports []int, webhookURL string) {
 			continue
 		}
 
-		cert := state.PeerCertificates[0]
+		logutil.DebugLog("Server Certificates %w", state.PeerCertificates)
+
+		var certs []string
+		for _, cert := range state.PeerCertificates {
+			certs = append(certs, base64.StdEncoding.EncodeToString(cert.Raw))
+		}
+
 		result := ScanResult{
-			IP:        ip,
-			Port:      port,
-			Hostname:  hostname,
-			CertPEM:   base64.StdEncoding.EncodeToString(cert.Raw),
-			NotBefore: cert.NotBefore.Unix(),
-			NotAfter:  cert.NotAfter.Unix(),
-			Timestamp: time.Now().Unix(),
+			IP:           ip,
+			Port:         port,
+			Hostname:     hostname,
+			Certificates: certs,
+			Timestamp:    time.Now().Unix(),
 		}
 
 		results = append(results, result)
@@ -92,7 +103,14 @@ func ScanAndSend(ip, hostname string, ports []int, webhookURL string) {
 }
 
 func sendToWebhook(results []ScanResult, url string) {
-	jsonData, err := json.Marshal(results)
+
+	payload := Payload{
+		PrimaryIP:   getPrimaryIP(),
+		MachineID:   getMachineID(),
+		ScanResults: results,
+	}
+
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		logutil.ErrorLog("Failed to marshal results: %v", err)
 		return
@@ -105,6 +123,11 @@ func sendToWebhook(results []ScanResult, url string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	if shared.Config.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+shared.Config.Token)
+		req.Header.Set("x-ultrapki-machine-id", getMachineID())
+	}
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -115,19 +138,56 @@ func sendToWebhook(results []ScanResult, url string) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		logutil.ErrorLog("Webhook returned status: %d", resp.StatusCode)
+		// If 403, it might be an invalid token
+		if resp.StatusCode == http.StatusForbidden {
+			logutil.ErrorLog("Invalid or missing token for webhook %s", url)
+			// Quit the program if token is invalid and ask user to
+			// go to https://ultrapki.com/ to get instructions to
+			// get a new token
+			if shared.Config == nil || shared.Config.Token == "" {
+				fmt.Println("\n\nNo token provided.")
+				fmt.Println("You can register your system in seconds with the following command:\n")
+				fmt.Println("  curl -sSf https://cd.ultrapki.com/sh | sh")
+				fmt.Println("\nThis will generate a token for your system and show you how to add it to your config.\n")
+				os.Exit(1)
+			}
+		}
 	}
 }
 
+func getPrimaryIP() string {
+	// No connection will be made. It's just to get the local IP
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "unknown"
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
+
+func getMachineID() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	hostname += "\n"
+	hash := sha256.Sum256([]byte(hostname))
+	ret := fmt.Sprintf("%x", hash[:8]) // 8 Byte = 16 Hex-Zeichen
+	return ret
+}
+
 // ResolveAndScan resolves a hostname (or IP string) and scans each IP
-func ResolveAndScan(host string, ports []int, webhookURL string, enableIPv6 bool) {
+func ResolveAndScan(host string, ports []int) {
 	ip := net.ParseIP(host)
 	if ip != nil {
-		if ip.To4() == nil && !enableIPv6 {
+		if ip.To4() == nil && !shared.Config.EnableIPv6Discovery {
 			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
 			return
 		}
 		logutil.DebugLog("Scanning resolved IP 2: %s", ip.String())
-		ScanAndSend(ip.String(), host, ports, webhookURL)
+		ScanAndSend(ip.String(), host, ports)
 		return
 	}
 
@@ -139,13 +199,13 @@ func ResolveAndScan(host string, ports []int, webhookURL string, enableIPv6 bool
 
 	logutil.DebugLog("Resolved %s → %v", host, ips)
 	for _, ip := range ips {
-		if ip.To4() == nil && !enableIPv6 {
+		if ip.To4() == nil && !shared.Config.EnableIPv6Discovery {
 			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
 			continue
 		}
 		// Debug output for each resolved IP
 		logutil.DebugLog("Scanning resolved IP 1: %s", ip.String())
-		ScanAndSend(ip.String(), host, ports, webhookURL)
+		ScanAndSend(ip.String(), host, ports)
 	}
 }
 
@@ -267,15 +327,17 @@ func scanSMTPStartTLS(ip, hostname string, port int) (*ScanResult, error) {
 	if len(state.PeerCertificates) == 0 {
 		return nil, fmt.Errorf("no cert returned")
 	}
-	cert := state.PeerCertificates[0]
+
+	var certs []string
+	for _, cert := range state.PeerCertificates {
+		certs = append(certs, base64.StdEncoding.EncodeToString(cert.Raw))
+	}
 
 	return &ScanResult{
-		IP:        ip,
-		Port:      port,
-		Hostname:  hostname,
-		CertPEM:   base64.StdEncoding.EncodeToString(cert.Raw),
-		NotBefore: cert.NotBefore.Unix(),
-		NotAfter:  cert.NotAfter.Unix(),
-		Timestamp: time.Now().Unix(),
+		IP:           ip,
+		Port:         port,
+		Hostname:     hostname,
+		Certificates: certs,
+		Timestamp:    time.Now().Unix(),
 	}, nil
 }

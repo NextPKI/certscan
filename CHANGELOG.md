@@ -1,5 +1,13 @@
 # Changes
 
+### 05/26/2025
+
+ - Added CIDR-based IP discovery for all IPv4 interfaces
+ - Excluded loopback (127.0.0.0/8) and broadcast (.255) addresses from scan
+ - Report now includes full TLS certificate chain
+ - UltraPKI dashboard integration added (token-bound access, secure password setup)
+
+
 ### 05/24/2025
 
 - Added support for host:port entries in static_hosts to override global port list per host

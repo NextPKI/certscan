@@ -2,3 +2,5 @@
 .vscode
 *.pem
 certscan
+*.sh
+test-*

@@ -8,6 +8,7 @@ import (
 
 type Config struct {
 	WebhookURL          string   `yaml:"webhook_url"`
+	Token               string   `yaml:"ultrapki_token",omitempty`
 	ScanIntervalSeconds int      `yaml:"scan_interval_seconds"`
 	ScanThrottleDelayMs int      `yaml:"scan_throttle_delay_ms"`
 	EnableIPv6Discovery bool     `yaml:"enable_ipv6_discovery"`
