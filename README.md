@@ -2,16 +2,17 @@
 
 A lightweight, daemon-capable certificate discovery and reporting agent written in Go and Python.
 
-This tool acts as an **auto-discovery agent** that scans your entire local IPv4 and (optionally) IPv6 network for TLS-enabled services. It automatically identifies neighbors on the network and inspects known ports for certificates. In addition to dynamic discovery, it also supports scanning explicitly configured static IP addresses and hostnames.
+This tool acts as an **auto-discovery agent** that scans your entire local IPv4 and (optionally) IPv6 network for TLS-enabled services. It automatically identifies neighbors on the network and inspects known ports for certificates. In addition to dynamic discovery, it also supports scanning explicitly configured static IP addresses, hostnames, and custom port/protocol combinations.
 
-For every discovered service, the agent extracts TLS certificate metadata (issuer, fingerprint, expiration) and sends the result to a central Webhook endpoint. It supports both traditional TLS handshakes and STARTTLS upgrades (e.g., SMTP on port 587).
+For every discovered service, the agent extracts TLS certificate metadata (issuer, fingerprint, expiration) and sends the result to a central Webhook endpoint. It supports both traditional TLS handshakes and STARTTLS upgrades (e.g., SMTP on port 587). HTTP(S) endpoints are scanned with proper SNI and Host headers, and protocol-specific logic is applied for web and mail services.
 
 ## Features
 
 * Automatic discovery of network neighbors over IPv4 and optionally IPv6
-* Static IP and hostname support with optional per-host port override
+* Static IP, hostname, and CIDR support with per-target port/protocol override
 * Hostname resolution (A and AAAA records)
 * SNI-aware TLS support for accurate certificate retrieval
+* HTTP/1.1, HTTP/2, HTTP/3, and STARTTLS (SMTP, IMAP, POP3) protocol support
 * Periodic background scanning (daemon mode)
 * Webhook delivery with JSON and base64-encoded certificates
 * Configurable port list and scan throttle
@@ -24,35 +25,41 @@ For every discovered service, the agent extracts TLS certificate metadata (issue
 
 ### Example: `config.yaml`
 
-```
+```yaml
 webhook_url: "http://localhost:8000/webhook"
-scan_interval_seconds: 30
+ultrapki_token: "" # Optional: UltraPKI dashboard token
+#machine_id: "your-custom-machine-id"
+scan_interval_seconds: 3600 # For production, use >3600 (1 hour)
 scan_throttle_delay_ms: 50
-ipv6_throttle_per_minute: 10
-enable_ipv6_discovery: true
-debug: true
-
+enable_ipv6_discovery: false
+#debug: true
 ports:
-  - 443
-  - 4433
-  - 465
-  - 587
-  - 993
-  - 995
-  - 8443
-
-static_hosts:
-  - 127.0.0.1
-  - localhost
-  - smtp.gmail.com
-  - mail.example.com:587
-  - 2001:4860:4860::8888
+  - 443   # HTTPS
+  - 465   # SMTPS (legacy)
+  - 587   # SMTP (submission)
+  - 993   # IMAPS
+  - 995   # POP3S
+include_list:
+  - target: "192.168.1.10"
+  - target: "mail.example.com:993"
+    protocol: "imap"
+  - target: "10.0.0.0/28"
+  - target: "web.example.com"
+    protocol: "h2"
+  - target: "203.0.113.5:5001"
+    protocol: "http1"
+exclude_list:
+  - 192.168.1.1
+  - badhost.example.com
+  - 10.0.0.0/28
+  - 2001:db8::/32
 ```
 
-* `static_hosts` accepts plain IP addresses, hostnames, or `host:port` entries.
-* If a port is provided (e.g., `mail.example.com:587`), only that port is scanned.
-* If no port is provided, all ports defined in the `ports` section are used.
-* Hostnames are resolved to A and AAAA records; IPv6 is used only if explicitly enabled.
+* `include_list` supports hostnames, IPs, host:port, and IPv4 CIDR ranges. Optionally, set `protocol` (http1, h2, h3, smtp, imap, pop3, custom) per entry.
+* If `protocol` is set and no port is given, only port 443 is scanned for that entry.
+* If `protocol` is set and a port is given, protocol rules are applied for that port.
+* If `protocol` is omitted and the port is a typical web port, http1 is assumed.
+* `exclude_list` supports hostnames, IPs, and IPv4/IPv6 CIDRs. Any match is skipped, even if included elsewhere.
 
 ## Building the Tool
 
@@ -106,13 +113,13 @@ WantedBy=multi-user.target
 
 A basic testing server is provided at `server/test-webhook-server.py`.
 It parses incoming POST requests containing base64-encoded DER certificates and displays metadata such as issuer, validity, and fingerprint.
-Supports multiple IPs per hostname.
+Supports multiple IPs per hostname. If you add new fields to the webhook payload (e.g., protocol, HTTP headers), update the script to print them.
 
 ## Local TLS Test Server
 
 Use the `test-tls-server.sh` script to simulate a local TLS endpoint.
 This will create a self-signed certificate and launch a TLS server on `localhost:4433`.
-Add `localhost:4433` to your `static_hosts` in the config file to validate local discovery.
+Add `localhost:4433` to your `include_list` in the config file to validate local discovery.
 
 ## License
 
