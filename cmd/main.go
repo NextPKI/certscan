@@ -69,6 +69,70 @@ func incIP(ip net.IP) {
 	}
 }
 
+func isExcluded(host string, excludeList []string) bool {
+	ip := net.ParseIP(host)
+	// Debug output isExcluded end exit
+	for _, ex := range excludeList {
+		if strings.EqualFold(host, ex) {
+			return true
+		}
+		// CIDR exclusion (IPv4 and IPv6)
+		if _, ipnet, err := net.ParseCIDR(ex); err == nil {
+			if ip != nil && ipnet.Contains(ip) {
+				return true
+			} else {
+			}
+
+			// If host is a hostname, resolve and check all IPs
+			if ip == nil {
+				ips, err := net.LookupIP(host)
+				if err == nil {
+					for _, resolvedIP := range ips {
+						if ipnet.Contains(resolvedIP) {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isExplicitlyIncluded(host string, includeList []string) bool {
+	for _, entry := range includeList {
+		// Only match direct host/IP/host:port entries, not CIDRs
+		if _, _, err := net.ParseCIDR(entry); err == nil {
+			continue
+		}
+		if strings.EqualFold(host, entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func expandIncludeList(includeList []string) []string {
+	var expanded []string
+	for _, entry := range includeList {
+		if _, ipnet, err := net.ParseCIDR(entry); err == nil {
+			// Only expand IPv4 CIDRs
+			if ipnet.IP.To4() != nil {
+				for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
+					ipCopy := net.ParseIP(ip.String())
+					if ipCopy != nil {
+						expanded = append(expanded, ipCopy.String())
+					}
+				}
+				continue
+			}
+			// IPv6 CIDRs are ignored for inclusion
+		}
+		expanded = append(expanded, entry)
+	}
+	return expanded
+}
+
 func main() {
 
 	normalizeFlags()
@@ -113,32 +177,63 @@ func main() {
 	for {
 		scanned := make(map[string]bool)
 
-		// Static Hosts
-		for _, hostEntry := range cfg.StaticHosts {
+		// Include List
+		for _, entry := range cfg.IncludeList {
+			hostEntry := entry.Target
+			protocol := ""
+			// Only apply protocol if target contains a custom port
+			_, port, hasPort, _ := parseStaticHostEntry(hostEntry)
+			// log Protocol if specified
+			if hasPort && port != "" {
+				protocol = entry.Protocol
+			} else if entry.Protocol == "http1" || entry.Protocol == "h2" || entry.Protocol == "h3" {
+				protocol = entry.Protocol
+				// If protocol is http1/h2/h3 and no port is specified, only scan 443
+				host, _, _, _ := parseStaticHostEntry(hostEntry)
+				logutil.DebugLog("Protocol %s specified for %s without port, scanning only 443", protocol, host)
+				if scanned[hostEntry+":443"] {
+					continue
+				}
+				scanner.ScanAndSendWithProtocol(host, host, []int{443}, protocol)
+				scanned[hostEntry+":443"] = true
+				time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
+				continue
+			}
 			if scanned[hostEntry] {
 				continue
 			}
 
+			logutil.DebugLog("Processing include entry: %s (port: %s, hasPort: %t)", hostEntry, port, hasPort)
+
 			host, port, hasPort, err := parseStaticHostEntry(hostEntry)
 			if err != nil {
-				logutil.ErrorLog("Failed to parse static_hosts entry %s: %v", hostEntry, err)
+				logutil.ErrorLog("Failed to parse include_list entry %s: %v", hostEntry, err)
+				continue
+			}
+
+			// Only apply exclusion if not explicitly included
+			if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && (isExcluded(hostEntry, cfg.ExcludeList) || isExcluded(host, cfg.ExcludeList)) {
+				logutil.DebugLog("Skipping excluded host: %s", hostEntry)
 				continue
 			}
 
 			ip := net.ParseIP(host)
 			if ip != nil {
+				if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && isExcluded(ip.String(), cfg.ExcludeList) {
+					// logutil.DebugLog("Skipping excluded IP: %s", ip.String())
+					continue
+				}
 				if ip.To4() == nil && !cfg.EnableIPv6Discovery {
 					logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", host)
 					continue
 				}
-
 				if hasPort {
 					portNum, _ := strconv.Atoi(port)
 					logutil.DebugLog("Scanning static IP: %s (port %d only)", host, portNum)
-					scanner.ScanAndSend(ip.String(), host, []int{portNum})
+					scanner.ScanAndSendWithProtocol(ip.String(), host, []int{portNum}, protocol)
 				} else {
 					logutil.DebugLog("Scanning static IP: %s (all ports)", host)
-					scanner.ScanAndSend(ip.String(), host, cfg.Ports)
+					scanner.ScanAndSendWithProtocol(ip.String(), host, cfg.Ports, protocol)
 				}
 				scanned[hostEntry] = true
 				time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
@@ -155,16 +250,20 @@ func main() {
 					continue
 				}
 				for _, ip := range ips {
+					if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && isExcluded(ip.String(), cfg.ExcludeList) {
+						logutil.DebugLog("Skipping excluded resolved IP: %s", ip.String())
+						continue
+					}
 					if ip.To4() == nil && !cfg.EnableIPv6Discovery {
 						logutil.DebugLog("Skipping resolved IPv6 address %s (IPv6 disabled)", ip)
 						continue
 					}
-					logutil.DebugLog("Scanning resolved IP: %s for hostname %s (port %d)", ip, host, portNum)
-					scanner.ScanAndSend(ip.String(), host, []int{portNum})
+					logutil.DebugLog("Scanning resolved IP: %s for hostname %s (port %d), %s", ip, host, portNum, protocol)
+					scanner.ScanAndSendWithProtocol(ip.String(), host, []int{portNum}, protocol)
 				}
 			} else {
 				logutil.DebugLog("Scanning static hostname: %s (all ports)", host)
-				scanner.ResolveAndScan(host, cfg.Ports)
+				scanner.ResolveAndScanWithProtocol(host, cfg.Ports, protocol)
 			}
 
 			scanned[hostEntry] = true
@@ -208,6 +307,11 @@ func main() {
 						continue
 					}
 
+					if isExcluded(ipStr, cfg.ExcludeList) {
+						// logutil.DebugLog("[cidr] Skipping excluded IP: %s", ipStr)
+						continue
+					}
+
 					if !scanned[ipStr] {
 						logutil.DebugLog("[cidr] Scanning IP %s on ports %v", ipStr, cfg.Ports)
 						scanner.ScanAndSend(ipStr, ipStr, cfg.Ports)
@@ -244,4 +348,13 @@ func main() {
 		logutil.DebugLog("✅ Scan cycle complete. Sleeping for %d seconds...\n", cfg.ScanIntervalSeconds)
 		time.Sleep(time.Duration(cfg.ScanIntervalSeconds) * time.Second)
 	}
+}
+
+// Helper to flatten IncludeList to []string for isExplicitlyIncluded
+func flattenIncludeList(list []config.IncludeEntry) []string {
+	var out []string
+	for _, e := range list {
+		out = append(out, e.Target)
+	}
+	return out
 }

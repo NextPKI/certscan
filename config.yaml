@@ -1,30 +1,82 @@
-# Your custom webhook:
-#webhook_url: "http://localhost:5173/webhook"
-
-# If you want to use UltraPKI's dashboard:
+# UltraPKI Certificate Discovery Agent Configuration
+#
+# This configuration file controls which hosts, IPs, and networks are scanned for TLS certificates.
+#
+# --- INCLUDE LIST ---
+# 'include_list' defines the scan targets. Each entry is an object with:
+#   - 'target': Hostname, IP address, host:port, or IPv4 CIDR range to scan.
+#   - 'protocol' (optional): One of [http1, h2, h3, smtp, imap, pop3, custom].
+#     * If 'protocol' is set and no port is given, scanner follows best practice for the given protocol.
+#     * If 'protocol' is set and a port is given, protocol rules are applied for that port.
+#     * If 'protocol' is omitted and the port is a typical web port, http1 is assumed.
+#   - IPv4 CIDRs (e.g. 10.0.0.0/24) are expanded to scan all IPs in the range.
+#   - IPv6 CIDRs are ignored for inclusion.
+#
+# Example include_list:
+#   - target: "192.168.1.10"          # All ports listed under 'ports:' will be tested on this IP
+#   - target: "mail.example.com:993"  # Only port 993 will be tested (commonly used for IMAP)
+#   - target: "10.0.0.0/28"           # All IPs in this CIDR range will be scanned on all defined ports
+#   - target: "web.example.com"       # Only HTTP/2 will be tested for this hostname
+#     protocol: "h2"
+#   - target: "203.0.113.5:5001"      # Only HTTP/1.1 will be tested on port 5001
+#     protocol: "http1"
+#
+# --- EXCLUDE LIST ---
+# 'exclude_list' defines hosts, IPs, or networks to skip during scanning.
+#   - Accepts hostnames, IPs, IPv4 and IPv6 CIDRs.
+#   - Any IP or hostname (or resolved IP) in this list will not be scanned, even if included elsewhere.
+#
+# Example exclude_list:
+#   - 192.168.1.1
+#   - badhost.example.com
+#   - 10.0.0.0/28
+#   - 2001:db8::/32
+#
+# --- WEBHOOK & AGENT IDENTITY ---
+# 'webhook_url': The endpoint to which scan results are POSTed (UltraPKI dashboard or your own server).
+# 'ultrapki_token': (Optional) Authentication token for the UltraPKI dashboard or API.
+#   - Set this token if you are using the official UltraPKI cloud service.
+#   - The token is provided when you register your agent with UltraPKI.
+#   - Leave empty if you are using a custom or local webhook server.
+#   - Exec "curl -sSf https://cd.ultrapki.com/sh | sh" to fetch an token.
+# 'machine_id': (Optional) Set a custom agent ID. If omitted, a deterministic ID is generated from your system.
+#
+# --- SCAN SCHEDULE & PERFORMANCE ---
+# 'scan_interval_seconds': How often to perform a full scan (in seconds). For production, use >3600 (1 hour).
+# 'scan_throttle_delay_ms': Delay (ms) between individual scans to reduce network load.
+#
+# --- NETWORK & LOGGING ---
+# 'enable_ipv6_discovery': Enable/disable IPv6 neighbor discovery.
+# 'debug': Enable verbose debug logging.
+#
+# --- PORTS ---
+# 'ports': List of ports to scan for each host/IP (unless overridden by protocol/port in include_list).
+#
+webhook_url: "http://localhost:8000/webhook" # Local test server (server/test-webhook-server.py)
 #webhook_url: "https://cd.ultrapki.com/webhook"
 #ultrapki_token: ""
-#   Run this command to get a UltraPKI token:
-#   curl -sSf https://cd.ultrapki.com/sh | sh
+#machine_id: "your-custom-machine-id"
 
-# Scan and send every 30 seconds
-scan_interval_seconds: 30
-# Delay between each individual scan (IPv4, IPv6, static)
+scan_interval_seconds: 3600
 scan_throttle_delay_ms: 50
-# Enables IPv6
 enable_ipv6_discovery: false
-# Enable debug logging
 debug: true
-
 ports:
   - 443   # HTTPS
   - 465   # SMTPS (legacy)
   - 587   # SMTP (submission)
   - 993   # IMAPS
   - 995   # POP3S
-
-static_hosts:
-  - 127.0.0.1
-  - localhost:4433
-  - smtp.gmail.com
-  - 2606:4700::6810:85e5:443
+include_list:
+  - target: "192.168.1.10"
+  - target: "mail.example.com:993"
+  - target: "10.0.0.0/28"
+  - target: "web.example.com"
+    protocol: "h2"
+  - target: "203.0.113.5:5001"
+    protocol: "http1"
+exclude_list:
+  - 192.168.1.1
+  - badhost.example.com
+  - 10.0.0.0/28
+  - 2001:db8::/32

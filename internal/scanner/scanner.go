@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -19,6 +20,9 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv6"
 )
+
+// Allowed protocols for include_list 'protocol' field
+var AllowedProtocols = []string{"http1", "h2", "h3", "smtp", "ldap", "imap", "pop3", "custom"}
 
 type Payload struct {
 	PrimaryIP   string       `json:"primary_ip,omitempty"`
@@ -39,11 +43,13 @@ func ScanAndSend(ip, hostname string, ports []int) {
 	var results []ScanResult
 	webhookURL := shared.Config.WebhookURL
 
+	webPorts := map[int]bool{443: true, 8443: true, 4433: true, 10443: true}
+
 	for _, port := range ports {
 
 		if port == 587 { // Special case for SMTP with STARTTLS
 			// Debug output for ip, hostname
-			logutil.DebugLog("Scanning %s|%s:%d for STARTTLS", ip, hostname, port)
+			logutil.DebugLog("Scanning %s -> %s:%d for STARTTLS", ip, hostname, port)
 			result, err := scanSMTPStartTLS(ip, hostname, port)
 			if err != nil {
 				logutil.DebugLog("STARTTLS scan failed: %v", err)
@@ -57,32 +63,93 @@ func ScanAndSend(ip, hostname string, ports []int) {
 			continue
 		}
 
-		// For other ports, use TLS directly
-
 		address := fmt.Sprintf("[%s]:%d", ip, port)
 		dialer := &net.Dialer{Timeout: time.Second}
 
-		conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+		certMap := make(map[string]struct{})
+		var certs []string
+		var httpHeaders map[string][]string
+
+		// Try ECDSA/ECDH first (include legacy suites, allow all TLS versions)
+		ecdsaSuites := []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+			tls.TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,
+		}
+		ecdsaConn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
 			InsecureSkipVerify: true,
 			ServerName:         hostname,
+			CipherSuites:       ecdsaSuites,
+			MinVersion:         tls.VersionTLS10, // allow all versions
+			MaxVersion:         tls.VersionTLS13, // allow up to TLS 1.3
 		})
-
-		if err != nil {
-			logutil.DebugLog("Unable to connect to %s: %v", address, err)
-			continue
+		if err == nil {
+			state := ecdsaConn.ConnectionState()
+			for _, cert := range state.PeerCertificates {
+				enc := base64.StdEncoding.EncodeToString(cert.Raw)
+				if _, exists := certMap[enc]; !exists {
+					certs = append(certs, enc)
+					certMap[enc] = struct{}{}
+				}
+			}
+			// If this is a web port, send HTTP GET with Host header
+			if webPorts[port] {
+				if headers, err := fetchHTTPHeadersOverTLS(ecdsaConn, hostname, port); err == nil {
+					httpHeaders = headers
+				}
+			}
+			ecdsaConn.Close()
 		}
 
-		state := conn.ConnectionState()
-		if len(state.PeerCertificates) == 0 {
-			conn.Close()
-			continue
+		// Then try RSA (include legacy suites, allow all TLS versions)
+		rsaSuites := []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+			tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,
+			tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA,
+			tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
+			tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+			tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+			tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+			tls.TLS_RSA_WITH_RC4_128_SHA,
+		}
+		rsaConn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         hostname,
+			CipherSuites:       rsaSuites,
+			MinVersion:         tls.VersionTLS10, // allow all versions
+			MaxVersion:         tls.VersionTLS13, // allow up to TLS 1.3
+		})
+		if err == nil {
+			state := rsaConn.ConnectionState()
+			for _, cert := range state.PeerCertificates {
+				enc := base64.StdEncoding.EncodeToString(cert.Raw)
+				if _, exists := certMap[enc]; !exists {
+					certs = append(certs, enc)
+					certMap[enc] = struct{}{}
+				}
+			}
+			if webPorts[port] && httpHeaders == nil {
+				if headers, err := fetchHTTPHeadersOverTLS(rsaConn, hostname, port); err == nil {
+					httpHeaders = headers
+				}
+			}
+			rsaConn.Close()
 		}
 
-		logutil.DebugLog("Server Certificates %w", state.PeerCertificates)
-
-		var certs []string
-		for _, cert := range state.PeerCertificates {
-			certs = append(certs, base64.StdEncoding.EncodeToString(cert.Raw))
+		if len(certs) == 0 {
+			logutil.DebugLog("No certificates found for %s:%d", ip, port)
+			continue
 		}
 
 		result := ScanResult{
@@ -92,14 +159,37 @@ func ScanAndSend(ip, hostname string, ports []int) {
 			Certificates: certs,
 			Timestamp:    time.Now().Unix(),
 		}
-
+		// Optionally, you can add httpHeaders to ScanResult if you want to send them to the webhook
 		results = append(results, result)
-		conn.Close()
 	}
 
 	if len(results) > 0 {
 		sendToWebhook(results, webhookURL)
 	}
+}
+
+// fetchHTTPHeadersOverTLS sends an HTTP GET / request with Host header over an existing TLS connection
+func fetchHTTPHeadersOverTLS(conn *tls.Conn, hostname string, port int) (map[string][]string, error) {
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialTLS: func(_, _ string) (net.Conn, error) {
+				return conn, nil
+			},
+		},
+		Timeout: 3 * time.Second,
+	}
+	urlStr := fmt.Sprintf("https://%s:%d/", hostname, port)
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Host = hostname
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return resp.Header, nil
 }
 
 func sendToWebhook(results []ScanResult, url string) {
@@ -168,14 +258,30 @@ func getPrimaryIP() string {
 }
 
 func getMachineID() string {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return "unknown"
+	if shared.Config != nil && shared.Config.MachineID != "" {
+		return shared.Config.MachineID
 	}
-	hostname += "\n"
-	hash := sha256.Sum256([]byte(hostname))
-	ret := fmt.Sprintf("%x", hash[:8]) // 8 Byte = 16 Hex-Zeichen
-	return ret
+	if data, err := os.ReadFile("/etc/machine-id"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	if data, err := os.ReadFile("/var/lib/dbus/machine-id"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+
+	hostname, _ := os.Hostname()
+	mac := ""
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagLoopback == 0 && iface.Flags&net.FlagUp != 0 && len(iface.HardwareAddr) == 6 {
+				mac = strings.ToLower(iface.HardwareAddr.String())
+				break
+			}
+		}
+	}
+	seed := hostname + "-" + mac
+	hash := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(hash[:])[:32]
 }
 
 // ResolveAndScan resolves a hostname (or IP string) and scans each IP
@@ -340,4 +446,147 @@ func scanSMTPStartTLS(ip, hostname string, port int) (*ScanResult, error) {
 		Certificates: certs,
 		Timestamp:    time.Now().Unix(),
 	}, nil
+}
+
+// ScanAndSendWithProtocol is a wrapper to support protocol-aware scanning
+func ScanAndSendWithProtocol(ip, hostname string, ports []int, protocol string) {
+	var results []ScanResult
+	webhookURL := shared.Config.WebhookURL
+
+	webPorts := map[int]bool{443: true, 8443: true, 4433: true, 5001: true, 10443: true}
+	smtpPorts := map[int]bool{25: true, 465: true, 587: true, 2525: true}
+
+	for _, port := range ports {
+		proto := protocol
+		if proto == "" && webPorts[port] {
+			proto = "http1"
+		}
+
+		logutil.DebugLog("Scanning %s -> %s:%d (protocol: %s)", ip, hostname, port, proto)
+
+		if proto == "smtp" || smtpPorts[port] {
+			logutil.DebugLog("Scanning %s -> %s:%d for STARTTLS (protocol: %s)", ip, hostname, port, proto)
+			result, err := scanSMTPStartTLS(ip, hostname, port)
+			if err != nil {
+				logutil.DebugLog("STARTTLS scan failed: %v", err)
+				continue
+			}
+			logutil.DebugLog("STARTTLS scan successful for %s:%d", ip, port)
+			logutil.DebugLog("Certificate for %s:%d: %w", ip, port, result)
+			sendToWebhook([]ScanResult{*result}, webhookURL)
+			continue
+		}
+
+		address := fmt.Sprintf("[%s]:%d", ip, port)
+		logutil.DebugLog("Connecting to %s", address)
+		dialer := &net.Dialer{Timeout: time.Second}
+
+		certMap := make(map[string]struct{})
+		var certs []string
+		var httpHeaders map[string][]string
+
+		// Try ECDSA/ECDH first (include legacy suites, allow all TLS versions)
+		ecdsaSuites := []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+			tls.TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,
+		}
+		ecdsaConn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         hostname,
+			CipherSuites:       ecdsaSuites,
+			MinVersion:         tls.VersionTLS10, // allow all versions
+			MaxVersion:         tls.VersionTLS13, // allow up to TLS 1.3
+		})
+		if err == nil {
+			state := ecdsaConn.ConnectionState()
+			for _, cert := range state.PeerCertificates {
+				enc := base64.StdEncoding.EncodeToString(cert.Raw)
+				if _, exists := certMap[enc]; !exists {
+					certs = append(certs, enc)
+					certMap[enc] = struct{}{}
+				}
+			}
+			if proto == "http1" || proto == "h2" || proto == "h3" {
+				if headers, err := fetchHTTPHeadersOverTLS(ecdsaConn, hostname, port); err == nil {
+					httpHeaders = headers
+				}
+			}
+			ecdsaConn.Close()
+		} else {
+			logutil.DebugLog("ECDSA connection failed: %v", err)
+		}
+
+		// Then try RSA (include legacy suites, allow all TLS versions)
+		rsaSuites := []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+			tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,
+			tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA,
+			tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
+			tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+			tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+			tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+			tls.TLS_RSA_WITH_RC4_128_SHA,
+		}
+		rsaConn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         hostname,
+			CipherSuites:       rsaSuites,
+			MinVersion:         tls.VersionTLS10, // allow all versions
+			MaxVersion:         tls.VersionTLS13, // allow up to TLS 1.3
+		})
+		if err == nil {
+			state := rsaConn.ConnectionState()
+			for _, cert := range state.PeerCertificates {
+				enc := base64.StdEncoding.EncodeToString(cert.Raw)
+				if _, exists := certMap[enc]; !exists {
+					certs = append(certs, enc)
+					certMap[enc] = struct{}{}
+				}
+			}
+			if (proto == "http1" || proto == "h2" || proto == "h3") && httpHeaders == nil {
+				if headers, err := fetchHTTPHeadersOverTLS(rsaConn, hostname, port); err == nil {
+					httpHeaders = headers
+				}
+			}
+			rsaConn.Close()
+		} else {
+			logutil.DebugLog("RSA connection failed: %v", err)
+		}
+
+		if len(certs) == 0 {
+			logutil.DebugLog("No certificates found for %s:%d", ip, port)
+			continue
+		}
+
+		result := ScanResult{
+			IP:           ip,
+			Port:         port,
+			Hostname:     hostname,
+			Certificates: certs,
+			Timestamp:    time.Now().Unix(),
+		}
+		results = append(results, result)
+	}
+
+	if len(results) > 0 {
+		sendToWebhook(results, webhookURL)
+	}
+}
+
+// ResolveAndScanWithProtocol is a wrapper to support protocol-aware scanning
+func ResolveAndScanWithProtocol(host string, ports []int, protocol string) {
+	// For now, just call ResolveAndScan (protocol param is available for future use)
+	ResolveAndScan(host, ports)
 }
