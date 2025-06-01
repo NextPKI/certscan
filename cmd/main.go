@@ -1,3 +1,16 @@
+// Command certscan is the entry point for the certificate discovery and scanning service.
+//
+// It loads configuration, sets up logging, and performs network scanning based on the include and exclude lists.
+// The service can run as a background daemon, write logs to a file, and supports IPv4 and optional IPv6 discovery.
+//
+// Usage flags:
+//
+//	--config:   Path to configuration file (default: config.yaml)
+//	--daemon:   Run as background daemon
+//	--logfile:  Optional path to log file
+//	--pidfile:  Optional path to PID file
+//
+// The main scan loop processes include/exclude lists, scans local interfaces, and optionally discovers IPv6 neighbors.
 package main
 
 import (
@@ -180,36 +193,44 @@ func main() {
 		// Include List
 		for _, entry := range cfg.IncludeList {
 			hostEntry := entry.Target
-			protocol := ""
-			// Only apply protocol if target contains a custom port
-			_, port, hasPort, _ := parseStaticHostEntry(hostEntry)
-			// log Protocol if specified
-			if hasPort && port != "" {
-				protocol = entry.Protocol
-			} else if entry.Protocol == "http1" || entry.Protocol == "h2" || entry.Protocol == "h3" {
-				protocol = entry.Protocol
-				// If protocol is http1/h2/h3 and no port is specified, only scan 443
-				host, _, _, _ := parseStaticHostEntry(hostEntry)
-				logutil.DebugLog("Protocol %s specified for %s without port, scanning only 443", protocol, host)
-				if scanned[hostEntry+":443"] {
-					continue
+			protocol := entry.Protocol
+
+			// Check if entry is a CIDR
+			if _, ipnet, err := net.ParseCIDR(hostEntry); err == nil && ipnet.IP.To4() != nil {
+				// Expand IPv4 CIDR to all IPs (excluding broadcast)
+				broadcast := make(net.IP, len(ipnet.IP.To4()))
+				for i := 0; i < len(ipnet.IP.To4()); i++ {
+					broadcast[i] = ipnet.IP[i] | ^ipnet.Mask[i]
 				}
-				scanner.ScanAndSendWithProtocol(host, host, []int{443}, protocol)
-				scanned[hostEntry+":443"] = true
-				time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
-				continue
-			}
-			if scanned[hostEntry] {
+				broadcastStr := broadcast.String()
+				for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
+					ipCopy := net.ParseIP(ip.String())
+					ipStr := ipCopy.String()
+					if ipStr == broadcastStr {
+						logutil.DebugLog("[include_cidr] Skipping broadcast IP: %s", ipStr)
+						continue
+					}
+					if isExcluded(ipStr, cfg.ExcludeList) {
+						continue
+					}
+					if !scanned[ipStr] {
+						logutil.DebugLog("[include_cidr] Scanning IP %s on ports %v (protocol: %s)", ipStr, cfg.Ports, protocol)
+						scanner.ScanAndSendWithProtocol(ipStr, ipStr, cfg.Ports, protocol)
+						scanned[ipStr] = true
+						time.Sleep(time.Duration(cfg.ScanThrottleDelayMs) * time.Millisecond)
+					}
+				}
 				continue
 			}
 
-			logutil.DebugLog("Processing include entry: %s (port: %s, hasPort: %t)", hostEntry, port, hasPort)
-
+			// Parse host entry for port and hasPort
 			host, port, hasPort, err := parseStaticHostEntry(hostEntry)
 			if err != nil {
 				logutil.ErrorLog("Failed to parse include_list entry %s: %v", hostEntry, err)
 				continue
 			}
+
+			logutil.DebugLog("Processing include entry: %s (port: %s, hasPort: %t)", hostEntry, port, hasPort)
 
 			// Only apply exclusion if not explicitly included
 			if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && (isExcluded(hostEntry, cfg.ExcludeList) || isExcluded(host, cfg.ExcludeList)) {
@@ -263,7 +284,7 @@ func main() {
 				}
 			} else {
 				logutil.DebugLog("Scanning static hostname: %s (all ports)", host)
-				scanner.ResolveAndScanWithProtocol(host, cfg.Ports, protocol)
+				scanner.ResolveAndScan(host, cfg.Ports)
 			}
 
 			scanned[hostEntry] = true

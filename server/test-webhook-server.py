@@ -1,3 +1,26 @@
+"""
+A simple HTTP webhook server for testing certificate scan result delivery.
+
+This script implements a local HTTP server that listens for POST requests containing JSON payloads
+with certificate scan results. It prints out details about the received certificates, including
+fingerprint, issuer, validity period, and more. The server is intended for local development and
+debugging of systems that send scan results via webhooks.
+
+Features:
+- Listens on port 8000 by default.
+- Accepts POST requests with JSON payloads containing scan results.
+- Decodes and parses X.509 certificates from base64 DER format.
+- Prints certificate details, skipping CA certificates by default (optional).
+- Handles graceful shutdown on SIGINT (Ctrl+C).
+
+Dependencies:
+- cryptography
+
+Usage:
+    python3 test-webhook-server.py
+
+"""
+
 #!/usr/bin/env python3
 import http.server
 import socketserver
@@ -30,6 +53,15 @@ class WebhookHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     certificates = entry.get("certificates", [])
                     print(f"🔒 Certificates for {entry['ip']}:{entry['port']}")
+                    # Display handshake_type, http_headers, and timestamp if present
+                    if 'handshake_type' in entry:
+                        print(f"    ➤ Handshake:  {entry['handshake_type']}")
+                    if 'timestamp' in entry:
+                        print(f"    ➤ Timestamp:  {entry['timestamp']}")
+                    if 'http_headers' in entry and entry['http_headers']:
+                        print(f"    ➤ HTTP Headers:")
+                        for k, v in entry['http_headers'].items():
+                            print(f"        {k}: {v}")
                     for cert in certificates:
                         der = base64.b64decode(cert)
                         cert = x509.load_der_x509_certificate(der, backend=default_backend())

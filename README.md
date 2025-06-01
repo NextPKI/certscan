@@ -27,18 +27,24 @@ For every discovered service, the agent extracts TLS certificate metadata (issue
 
 ```yaml
 webhook_url: "http://localhost:8000/webhook"
-ultrapki_token: "" # Optional: UltraPKI dashboard token
+#ultrapki_token: "" # Optional: UltraPKI dashboard token
 #machine_id: "your-custom-machine-id"
-scan_interval_seconds: 3600 # For production, use >3600 (1 hour)
-scan_throttle_delay_ms: 50
+
+debug: true
+dial_timeout_ms: 1000
 enable_ipv6_discovery: false
-#debug: true
+concurrency_limit: 8
+http_timeout_ms: 3000
 ports:
   - 443   # HTTPS
   - 465   # SMTPS (legacy)
   - 587   # SMTP (submission)
   - 993   # IMAPS
   - 995   # POP3S
+scan_interval_seconds: 3600
+scan_throttle_delay_ms: 50
+webhook_timeout_ms: 5000
+
 include_list:
   - target: "192.168.1.10"
   - target: "mail.example.com:993"
@@ -55,8 +61,9 @@ exclude_list:
   - 2001:db8::/32
 ```
 
+* `concurrency_limit`, `dial_timeout_ms`, `http_timeout_ms`, and `webhook_timeout_ms` are now configurable for performance and reliability.
+* All config values are now sorted for clarity (except include_list and exclude_list, which remain grouped at the end).
 * `include_list` supports hostnames, IPs, host:port, and IPv4 CIDR ranges. Optionally, set `protocol` (http1, h2, h3, smtp, imap, pop3, custom) per entry.
-* If `protocol` is set and no port is given, only port 443 is scanned for that entry.
 * If `protocol` is set and a port is given, protocol rules are applied for that port.
 * If `protocol` is omitted and the port is a typical web port, http1 is assumed.
 * `exclude_list` supports hostnames, IPs, and IPv4/IPv6 CIDRs. Any match is skipped, even if included elsewhere.

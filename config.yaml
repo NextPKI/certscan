@@ -38,16 +38,22 @@
 #   - Set this token if you are using the official UltraPKI cloud service.
 #   - The token is provided when you register your agent with UltraPKI.
 #   - Leave empty if you are using a custom or local webhook server.
-#   - Exec "curl -sSf https://cd.ultrapki.com/sh | sh" to fetch an token.
+#   - Exec "curl -sSf https://cd.ultrapki.com/sh | sh" to fetch a token.
 # 'machine_id': (Optional) Set a custom agent ID. If omitted, a deterministic ID is generated from your system.
 #
 # --- SCAN SCHEDULE & PERFORMANCE ---
 # 'scan_interval_seconds': How often to perform a full scan (in seconds). For production, use >3600 (1 hour).
 # 'scan_throttle_delay_ms': Delay (ms) between individual scans to reduce network load.
+# 'concurrency_limit': Maximum number of concurrent scans (default: 8). Increase for faster scans, decrease to reduce network load.
 #
 # --- NETWORK & LOGGING ---
 # 'enable_ipv6_discovery': Enable/disable IPv6 neighbor discovery.
 # 'debug': Enable verbose debug logging.
+#
+# --- TIMEOUTS ---
+# 'dial_timeout_ms': Timeout for establishing network connections (in milliseconds).
+# 'http_timeout_ms': Timeout for HTTP requests (in milliseconds).
+# 'webhook_timeout_ms': Timeout for webhook result submissions (in milliseconds).
 #
 # --- PORTS ---
 # 'ports': List of ports to scan for each host/IP (unless overridden by protocol/port in include_list).
@@ -57,16 +63,22 @@ webhook_url: "http://localhost:8000/webhook" # Local test server (server/test-we
 #ultrapki_token: ""
 #machine_id: "your-custom-machine-id"
 
+concurrency_limit: 8
+dial_timeout_ms: 1000
+http_timeout_ms: 3000
+webhook_timeout_ms: 5000
 scan_interval_seconds: 3600
 scan_throttle_delay_ms: 50
 enable_ipv6_discovery: false
 debug: true
+
 ports:
   - 443   # HTTPS
   - 465   # SMTPS (legacy)
   - 587   # SMTP (submission)
   - 993   # IMAPS
   - 995   # POP3S
+
 include_list:
   - target: "192.168.1.10"
   - target: "mail.example.com:993"
@@ -75,6 +87,7 @@ include_list:
     protocol: "h2"
   - target: "203.0.113.5:5001"
     protocol: "http1"
+
 exclude_list:
   - 192.168.1.1
   - badhost.example.com

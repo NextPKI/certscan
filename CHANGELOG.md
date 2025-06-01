@@ -1,5 +1,28 @@
 # Changes
 
+### 06/01/2025
+
+- Unified protocol handling via ScanAndSendWithProtocol and protocolHandlers
+- Added global WebPorts and SmtpPorts mappings for protocol detection
+- ScanAndSend now defaults to http1 for unknown ports
+- Refactored getPrimaryIP and getMachineID, moved to shared.go
+- Improved documentation and code clarity in scanner.go
+- Updated config and test-config.yaml for modern include/exclude usage
+- Removed legacy ScanAndSend logic and updated all call sites
+- Various bugfixes and maintainability improvements
+
+### 05/31/2025
+
+- Added new configurable values in config.yaml:
+  - `concurrency_limit`: Controls the maximum number of concurrent scans (default: 8).
+  - `dial_timeout_ms`: Sets the dial timeout for network connections in milliseconds.
+  - `http_timeout_ms`: Sets the HTTP request timeout in milliseconds.
+  - `webhook_timeout_ms`: Sets the timeout for webhook result submissions in milliseconds.
+- Scanning engine now uses a semaphore to enforce the concurrency limit, improving resource control and stability.
+- All timeouts are now consistently applied in the scanner logic, allowing for fine-tuned network and webhook performance.
+- Improved documentation in config.yaml for all new and existing fields.
+- Refactored scanner to use config-driven concurrency and timeout values throughout.
+
 ### 05/28/2025
 
 - Major config.yaml documentation overhaul: clearer sectioning, modern examples, and detailed comments for each field.
