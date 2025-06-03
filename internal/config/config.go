@@ -18,24 +18,42 @@ type IncludeEntry struct {
 	Protocol string `yaml:"protocol,omitempty"`
 }
 
+// ExcludeCertRule represents a rule for excluding certificates based on issuer or CN.
+type ExcludeCertRule struct {
+	Issuer string `yaml:"issuer,omitempty"`
+	CN     string `yaml:"cn,omitempty"`
+	Name   string `yaml:"name,omitempty"` // Optional: for documentation
+}
+
 // Config represents the application's configuration loaded from a YAML file.
 // It includes webhook settings, scan intervals, network options, and more.
 type Config struct {
-	WebhookURL          string         `yaml:"webhook_url"`
-	Token               string         `yaml:"ultrapki_token",omitempty"`
-	ScanIntervalSeconds int            `yaml:"scan_interval_seconds"`
-	ScanThrottleDelayMs int            `yaml:"scan_throttle_delay_ms"`
-	EnableIPv6Discovery bool           `yaml:"enable_ipv6_discovery"`
-	Ports               []int          `yaml:"ports"`
-	IncludeList         []IncludeEntry `yaml:"include_list"`
-	ExcludeList         []string       `yaml:"exclude_list"`
-	Debug               bool           `yaml:"debug"`
-	MachineID           string         `yaml:"machine_id,omitempty"`
-	ConcurrencyLimit    int            `yaml:"concurrency_limit"`
-	DialTimeoutMs       int            `yaml:"dial_timeout_ms"`
-	HTTPTimeoutMs       int            `yaml:"http_timeout_ms"`
-	WebhookTimeoutMs    int            `yaml:"webhook_timeout_ms"`
+	WebhookURL          string            `yaml:"webhook_url"`
+	Token               string            `yaml:"ultrapki_token",omitempty"`
+	ScanIntervalSeconds int               `yaml:"scan_interval_seconds"`
+	ScanThrottleDelayMs int               `yaml:"scan_throttle_delay_ms"`
+	EnableIPv6Discovery bool              `yaml:"enable_ipv6_discovery"`
+	EnableIPv4Discovery bool              `yaml:"enable_ipv4_discovery"`
+	Ports               []int             `yaml:"ports"`
+	IncludeList         []IncludeEntry    `yaml:"include_list"`
+	ExcludeList         []string          `yaml:"exclude_list"`
+	ExcludeCerts        []ExcludeCertRule `yaml:"exclude_certs"`
+	Debug               bool              `yaml:"debug"`
+	MachineID           string            `yaml:"machine_id,omitempty"`
+	ConcurrencyLimit    int               `yaml:"concurrency_limit"`
+	DialTimeoutMs       int               `yaml:"dial_timeout_ms"`
+	ICMPTimeoutMs       int               `yaml:"icmp_timeout_ms"`
+	HTTPTimeoutMs       int               `yaml:"http_timeout_ms"`
+	WebhookTimeoutMs    int               `yaml:"webhook_timeout_ms"`
 }
+
+const (
+	DefaultConcurrency      = 10
+	DefaultDialTimeoutMs    = 1000
+	DefaultHTTPTimeoutMs    = 3000
+	DefaultWebhookTimeoutMs = 5000
+	DefaultICMPTimeoutMs    = 3000
+)
 
 // LoadConfig loads the configuration from the specified YAML file path.
 // It supports migration from the deprecated 'static_hosts' field to 'include_list'.
@@ -74,6 +92,22 @@ func LoadConfig(path string) (*Config, error) {
 	err = yaml.Unmarshal(data, &cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	if cfg.DialTimeoutMs <= 0 {
+		cfg.DialTimeoutMs = DefaultDialTimeoutMs
+	}
+	if cfg.HTTPTimeoutMs <= 0 {
+		cfg.HTTPTimeoutMs = DefaultHTTPTimeoutMs
+	}
+	if cfg.WebhookTimeoutMs <= 0 {
+		cfg.WebhookTimeoutMs = DefaultWebhookTimeoutMs
+	}
+	if cfg.ICMPTimeoutMs <= 0 {
+		cfg.ICMPTimeoutMs = DefaultICMPTimeoutMs
+	}
+	if cfg.ConcurrencyLimit <= 0 {
+		cfg.ConcurrencyLimit = DefaultConcurrency
 	}
 	return &cfg, nil
 }

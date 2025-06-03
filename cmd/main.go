@@ -26,34 +26,62 @@ import (
 	"time"
 
 	"github.com/ultrapki/certscan/internal/config"
+	"github.com/ultrapki/certscan/internal/discovery"
 	"github.com/ultrapki/certscan/internal/logutil"
 	"github.com/ultrapki/certscan/internal/scanner"
 	"github.com/ultrapki/certscan/internal/shared"
 )
 
-func writePIDFile(path string) {
-	pid := os.Getpid()
-	f, err := os.Create(path)
-	if err != nil {
-		log.Fatalf("Failed to write PID file: %v", err)
+// Helper to flatten IncludeList to []string for isExplicitlyIncluded
+func flattenIncludeList(list []config.IncludeEntry) []string {
+	var out []string
+	for _, e := range list {
+		out = append(out, e.Target)
 	}
-	fmt.Fprintf(f, "%d\n", pid)
-	f.Close()
+	return out
 }
 
-func normalizeFlags() {
-	aliases := map[string]string{
-		"-d": "--daemon",
-		"-c": "--config",
-		"-l": "--logfile",
-		"-p": "--pidfile",
-	}
-
-	for i, arg := range os.Args {
-		if val, ok := aliases[arg]; ok {
-			os.Args[i] = val
+func incIP(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] != 0 {
+			break
 		}
 	}
+}
+
+// expandIncludeList expands IPv4 CIDRs in the include list to all contained IPs (as strings).
+func expandIncludeList(includeList []config.IncludeEntry) []string {
+	var expanded []string
+	for _, entry := range includeList {
+		if _, ipnet, err := net.ParseCIDR(entry.Target); err == nil {
+			if ipnet.IP.To4() != nil {
+				for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
+					ipCopy := net.ParseIP(ip.String())
+					if ipCopy != nil {
+						expanded = append(expanded, ipCopy.String())
+					}
+				}
+				continue
+			}
+			// IPv6 CIDRs are ignored for inclusion
+		}
+		expanded = append(expanded, entry.Target)
+	}
+	return expanded
+}
+
+func isExplicitlyIncluded(host string, includeList []string) bool {
+	for _, entry := range includeList {
+		// Only match direct host/IP/host:port entries, not CIDRs
+		if _, _, err := net.ParseCIDR(entry); err == nil {
+			continue
+		}
+		if strings.EqualFold(host, entry) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseStaticHostEntry(entry string) (string, string, bool, error) {
@@ -73,77 +101,29 @@ func parseStaticHostEntry(entry string) (string, string, bool, error) {
 	return entry, "", false, nil
 }
 
-func incIP(ip net.IP) {
-	for j := len(ip) - 1; j >= 0; j-- {
-		ip[j]++
-		if ip[j] != 0 {
-			break
+func normalizeFlags() {
+	aliases := map[string]string{
+		"-d": "--daemon",
+		"-c": "--config",
+		"-l": "--logfile",
+		"-p": "--pidfile",
+	}
+
+	for i, arg := range os.Args {
+		if val, ok := aliases[arg]; ok {
+			os.Args[i] = val
 		}
 	}
 }
 
-func isExcluded(host string, excludeList []string) bool {
-	ip := net.ParseIP(host)
-	// Debug output isExcluded end exit
-	for _, ex := range excludeList {
-		if strings.EqualFold(host, ex) {
-			return true
-		}
-		// CIDR exclusion (IPv4 and IPv6)
-		if _, ipnet, err := net.ParseCIDR(ex); err == nil {
-			if ip != nil && ipnet.Contains(ip) {
-				return true
-			} else {
-			}
-
-			// If host is a hostname, resolve and check all IPs
-			if ip == nil {
-				ips, err := net.LookupIP(host)
-				if err == nil {
-					for _, resolvedIP := range ips {
-						if ipnet.Contains(resolvedIP) {
-							return true
-						}
-					}
-				}
-			}
-		}
+func writePIDFile(path string) {
+	pid := os.Getpid()
+	f, err := os.Create(path)
+	if err != nil {
+		log.Fatalf("Failed to write PID file: %v", err)
 	}
-	return false
-}
-
-func isExplicitlyIncluded(host string, includeList []string) bool {
-	for _, entry := range includeList {
-		// Only match direct host/IP/host:port entries, not CIDRs
-		if _, _, err := net.ParseCIDR(entry); err == nil {
-			continue
-		}
-		if strings.EqualFold(host, entry) {
-			return true
-		}
-	}
-	return false
-}
-
-func expandIncludeList(includeList []string) []string {
-	var expanded []string
-	for _, entry := range includeList {
-		if _, ipnet, err := net.ParseCIDR(entry); err == nil {
-			// Only expand IPv4 CIDRs
-			if ipnet.IP.To4() != nil {
-				for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
-					ipCopy := net.ParseIP(ip.String())
-					if ipCopy != nil {
-						expanded = append(expanded, ipCopy.String())
-					}
-				}
-				continue
-			}
-			// IPv6 CIDRs are ignored for inclusion
-		}
-		expanded = append(expanded, entry)
-	}
-	return expanded
+	fmt.Fprintf(f, "%d\n", pid)
+	f.Close()
 }
 
 func main() {
@@ -197,20 +177,23 @@ func main() {
 
 			// Check if entry is a CIDR
 			if _, ipnet, err := net.ParseCIDR(hostEntry); err == nil && ipnet.IP.To4() != nil {
-				// Expand IPv4 CIDR to all IPs (excluding broadcast)
+				ips, err := discovery.ExpandCIDR(hostEntry)
+				if err != nil {
+					logutil.ErrorLog("Failed to expand CIDR %s: %v", hostEntry, err)
+					continue
+				}
+				// Calculate broadcast IP
 				broadcast := make(net.IP, len(ipnet.IP.To4()))
 				for i := 0; i < len(ipnet.IP.To4()); i++ {
 					broadcast[i] = ipnet.IP[i] | ^ipnet.Mask[i]
 				}
 				broadcastStr := broadcast.String()
-				for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
-					ipCopy := net.ParseIP(ip.String())
-					ipStr := ipCopy.String()
+				for _, ipStr := range ips {
 					if ipStr == broadcastStr {
 						logutil.DebugLog("[include_cidr] Skipping broadcast IP: %s", ipStr)
 						continue
 					}
-					if isExcluded(ipStr, cfg.ExcludeList) {
+					if discovery.IsExcluded(ipStr, cfg.ExcludeList) {
 						continue
 					}
 					if !scanned[ipStr] {
@@ -233,14 +216,14 @@ func main() {
 			logutil.DebugLog("Processing include entry: %s (port: %s, hasPort: %t)", hostEntry, port, hasPort)
 
 			// Only apply exclusion if not explicitly included
-			if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && (isExcluded(hostEntry, cfg.ExcludeList) || isExcluded(host, cfg.ExcludeList)) {
+			if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && (discovery.IsExcluded(hostEntry, cfg.ExcludeList) || discovery.IsExcluded(host, cfg.ExcludeList)) {
 				logutil.DebugLog("Skipping excluded host: %s", hostEntry)
 				continue
 			}
 
 			ip := net.ParseIP(host)
 			if ip != nil {
-				if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && isExcluded(ip.String(), cfg.ExcludeList) {
+				if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && discovery.IsExcluded(ip.String(), cfg.ExcludeList) {
 					// logutil.DebugLog("Skipping excluded IP: %s", ip.String())
 					continue
 				}
@@ -271,7 +254,7 @@ func main() {
 					continue
 				}
 				for _, ip := range ips {
-					if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && isExcluded(ip.String(), cfg.ExcludeList) {
+					if !isExplicitlyIncluded(hostEntry, flattenIncludeList(cfg.IncludeList)) && discovery.IsExcluded(ip.String(), cfg.ExcludeList) {
 						logutil.DebugLog("Skipping excluded resolved IP: %s", ip.String())
 						continue
 					}
@@ -292,47 +275,12 @@ func main() {
 		}
 
 		// IPv4 Interfaces
-		interfaces, err := net.Interfaces()
-		if err != nil {
-			logutil.ErrorLog("Error getting interfaces: %v", err)
-		}
-
-		for _, iface := range interfaces {
-			addrs, _ := iface.Addrs()
-			for _, addr := range addrs {
-				ip, ipnet, err := net.ParseCIDR(addr.String())
-				if err != nil || ip.To4() == nil {
-					continue
-				}
-
-				// Skip 127.0.0.0/8 networks
-				if ip.IsLoopback() || ipnet.IP.IsLoopback() {
-					logutil.DebugLog("[cidr] Skipping loopback network: %s", ipnet.String())
-					continue
-				}
-
-				// 🎯 Calculate broadcast IP
-				broadcast := make(net.IP, len(ipnet.IP.To4()))
-				for i := 0; i < len(ipnet.IP.To4()); i++ {
-					broadcast[i] = ipnet.IP[i] | ^ipnet.Mask[i]
-				}
-				broadcastStr := broadcast.String()
-
-				// Scan all IPs in range (excluding broadcast)
-				for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
-					ipCopy := net.ParseIP(ip.String())
-					ipStr := ipCopy.String()
-
-					if ipStr == broadcastStr {
-						logutil.DebugLog("[cidr] Skipping broadcast IP: %s", ipStr)
-						continue
-					}
-
-					if isExcluded(ipStr, cfg.ExcludeList) {
-						// logutil.DebugLog("[cidr] Skipping excluded IP: %s", ipStr)
-						continue
-					}
-
+		if cfg.EnableIPv4Discovery {
+			ips, err := discovery.DiscoverIPv4Neighbors()
+			if err != nil {
+				logutil.ErrorLog("Error discovering IPv4 neighbors: %v", err)
+			} else {
+				for _, ipStr := range ips {
 					if !scanned[ipStr] {
 						logutil.DebugLog("[cidr] Scanning IP %s on ports %v", ipStr, cfg.Ports)
 						scanner.ScanAndSend(ipStr, ipStr, cfg.Ports)
@@ -345,12 +293,10 @@ func main() {
 
 		// IPv6 Nachbarschaft (optional)
 		if cfg.EnableIPv6Discovery {
-			for _, iface := range interfaces {
-				responders, err := scanner.DiscoverIPv6Neighbors(iface.Name)
-				if err != nil {
-					logutil.DebugLog("[debug] IPv6 discovery failed on %s: %v", iface.Name, err)
-					continue
-				}
+			responders, err := discovery.DiscoverIPv6Neighbors()
+			if err != nil {
+				logutil.DebugLog("[debug] IPv6 discovery failed: %v", err)
+			} else {
 				for _, ip := range responders {
 					if !scanned[ip] {
 						logutil.DebugLog("[debug] Scanning discovered IPv6 neighbor: %s\n", ip)
@@ -369,13 +315,4 @@ func main() {
 		logutil.DebugLog("✅ Scan cycle complete. Sleeping for %d seconds...\n", cfg.ScanIntervalSeconds)
 		time.Sleep(time.Duration(cfg.ScanIntervalSeconds) * time.Second)
 	}
-}
-
-// Helper to flatten IncludeList to []string for isExplicitlyIncluded
-func flattenIncludeList(list []config.IncludeEntry) []string {
-	var out []string
-	for _, e := range list {
-		out = append(out, e.Target)
-	}
-	return out
 }

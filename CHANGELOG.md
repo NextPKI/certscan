@@ -3,7 +3,10 @@
 ### 06/03/2025
 
 - Introduced webhook-proxy.py: a local HTTP proxy server that receives webhook calls from agents and forwards them to the UltraPKI Dashboard.
-
+- Config: Added support for exclude_certs in config.yaml to filter certificates by issuer and CN/subject (with wildcard support).
+- Config: Added icmp_timeout_ms to config.yaml for controlling ICMP timeouts (IPv6 discovery).
+- Scanner: Implemented certificate filtering logic; certificates matching exclude_certs are not sent to the webhook.
+- Scanner: Removed HTTPHeaders from ScanResult and all webhook payloads.
 
 ### 06/01/2025
 

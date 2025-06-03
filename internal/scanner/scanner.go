@@ -7,36 +7,26 @@ package scanner
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+	"github.com/ultrapki/certscan/internal/config"
 	"github.com/ultrapki/certscan/internal/logutil"
 	"github.com/ultrapki/certscan/internal/shared"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv6"
 )
 
 // AllowedProtocols lists all supported protocol names for scanning.
 // Used to validate and dispatch protocol-specific handlers.
 var AllowedProtocols = []string{"http1", "h2", "h3", "smtp", "ldap", "imap", "pop3", "custom"}
-
-const (
-	// DefaultConcurrency is the fallback number of concurrent scans if not set in config.
-	DefaultConcurrency = 8
-	// DefaultDialTimeoutMs is the fallback dial timeout (ms) for network connections.
-	DefaultDialTimeoutMs = 1000
-	// DefaultHTTPTimeoutMs is the fallback HTTP client timeout (ms) for HTTP header fetching.
-	DefaultHTTPTimeoutMs = 3000
-	// DefaultWebhookTimeoutMs is the fallback timeout (ms) for webhook POST requests.
-	DefaultWebhookTimeoutMs = 5000
-)
 
 // Payload represents the data sent to the webhook, including agent and scan results.
 // Contains the primary IP, machine ID, and a list of scan results.
@@ -49,50 +39,65 @@ type Payload struct {
 // ScanResult holds the result of a single port scan, including certificates and metadata.
 // Used for reporting to the webhook.
 type ScanResult struct {
-	IP            string              `json:"ip"`                       // Target IP address
-	Port          int                 `json:"port"`                     // Target port
-	Hostname      string              `json:"hostname,omitempty"`       // Optional: original hostname
-	HandshakeType string              `json:"handshake_type,omitempty"` // TLS handshake type (ecdsa/rsa)
-	Certificates  []string            `json:"certificates,omitempty"`   // Base64-encoded DER certificates
-	HTTPHeaders   map[string][]string `json:"http_headers,omitempty"`   // Optional: HTTP headers if scanned
-	Timestamp     int64               `json:"timestamp"`                // Unix timestamp of scan
+	IP            string   `json:"ip"`                       // Target IP address
+	Port          int      `json:"port"`                     // Target port
+	Hostname      string   `json:"hostname,omitempty"`       // Optional: original hostname
+	HandshakeType string   `json:"handshake_type,omitempty"` // TLS handshake type (ecdsa/rsa)
+	Certificates  []string `json:"certificates,omitempty"`   // Base64-encoded DER certificates
+	Timestamp     int64    `json:"timestamp"`                // Unix timestamp of scan
 }
 
-// fetchHTTPHeadersOverTLSWithTimeout sends an HTTP GET / request with Host header over an existing TLS connection and configurable timeout.
-// Returns HTTP headers if successful, or an error. Only works with *tls.Conn, not utls.UConn.
-// Parameters:
-//
-//	conn:      TLS connection (must be *tls.Conn)
-//	hostname:  Host header to use
-//	port:      Target port
-//	timeout:   Timeout for the HTTP request
-//
-// Returns: HTTP headers or error
-// func fetchHTTPHeadersOverTLSWithTimeout(conn *tls.Conn, hostname string, port int, timeout time.Duration) (map[string][]string, error) {
-// 	if timeout <= 0 {
-// 		timeout = 3 * time.Second
-// 	}
-// 	client := &http.Client{
-// 		Transport: &http.Transport{
-// 			DialTLS: func(_, _ string) (net.Conn, error) {
-// 				return conn, nil
-// 			},
-// 		},
-// 		Timeout: timeout,
-// 	}
-// 	urlStr := fmt.Sprintf("https://%s:%d/", hostname, port)
-// 	req, err := http.NewRequest("GET", urlStr, nil)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	req.Host = hostname
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer resp.Body.Close()
-// 	return resp.Header, nil
-// }
+// matchWildcard checks if s matches pattern (supports '*' wildcard)
+func matchWildcard(pattern, s string) bool {
+	if pattern == "" {
+		return false
+	}
+	pattern = strings.ToLower(pattern)
+	s = strings.ToLower(s)
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
+		return strings.Contains(s, pattern[1:len(pattern)-1])
+	}
+	if strings.HasPrefix(pattern, "*") {
+		return strings.HasSuffix(s, pattern[1:])
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(s, pattern[:len(pattern)-1])
+	}
+	return s == pattern
+}
+
+// isCertExcluded checks if a certificate matches any exclude_certs rule
+func isCertExcluded(cert *x509.Certificate, rules []config.ExcludeCertRule) bool {
+	issuer := cert.Issuer.String()
+	cn := cert.Subject.CommonName
+	for _, rule := range rules {
+		if (rule.Issuer != "" && matchWildcard(rule.Issuer, issuer)) ||
+			(rule.CN != "" && matchWildcard(rule.CN, cn)) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterCerts filters out excluded certs and returns a slice of base64 DER strings
+func filterCerts(derCerts [][]byte, rules []config.ExcludeCertRule) []string {
+	var filtered []string
+	for _, der := range derCerts {
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			continue // skip invalid certs
+		}
+		if isCertExcluded(cert, rules) {
+			logutil.DebugLog("Skipping certificate due to exclude_certs filter: CN=%s Issuer=%s", cert.Subject.CommonName, cert.Issuer.String())
+			continue
+		}
+		filtered = append(filtered, base64.StdEncoding.EncodeToString(der))
+	}
+	return filtered
+}
 
 // sendToWebhook posts scan results to the configured webhook URL as a JSON payload.
 // Adds authentication headers if configured. Handles error reporting and token validation.
@@ -167,11 +172,8 @@ func sendToWebhook(results []ScanResult, url string) {
 func ResolveAndScan(host string, ports []int) {
 	ip := net.ParseIP(host)
 	if ip != nil {
-		if ip.To4() == nil && !shared.Config.EnableIPv6Discovery {
-			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
-			return
-		}
-		logutil.DebugLog("Scanning resolved IP 2: %s", ip.String())
+
+		logutil.DebugLog("Scanning resolved IP: %s", ip.String())
 		ScanAndSendWithProtocol(ip.String(), host, ports, "http1")
 		return
 	}
@@ -184,80 +186,10 @@ func ResolveAndScan(host string, ports []int) {
 
 	logutil.DebugLog("Resolved %s → %v", host, ips)
 	for _, ip := range ips {
-		if ip.To4() == nil && !shared.Config.EnableIPv6Discovery {
-			logutil.DebugLog("Skipping IPv6 address %s (IPv6 disabled)", ip.String())
-			continue
-		}
 		// Debug output for each resolved IP
-		logutil.DebugLog("Scanning resolved IP 1: %s", ip.String())
+		logutil.DebugLog("Scanning resolved IP: %s", ip.String())
 		ScanAndSendWithProtocol(ip.String(), host, ports, "http1")
 	}
-}
-
-// DiscoverIPv6Neighbors sends an ICMPv6 multicast echo to ff02::1 on the given interface and returns a list of responding IP addresses.
-// Used for local IPv6 neighbor discovery.
-// Parameters:
-//
-//	ifaceName: Name of the network interface
-//
-// Returns: List of IPv6 addresses or error
-func DiscoverIPv6Neighbors(ifaceName string) ([]string, error) {
-	iface, err := net.InterfaceByName(ifaceName)
-	if err != nil {
-		return nil, fmt.Errorf("interface not found: %w", err)
-	}
-
-	conn, err := icmp.ListenPacket("udp6", fmt.Sprintf("%%%s", iface.Name))
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen for ICMPv6: %w", err)
-	}
-	defer conn.Close()
-
-	dst := &net.UDPAddr{
-		IP:   net.ParseIP("ff02::1"),
-		Zone: iface.Name,
-	}
-
-	echo := icmp.Message{
-		Type: ipv6.ICMPTypeEchoRequest,
-		Code: 0,
-		Body: &icmp.Echo{
-			ID:   os.Getpid() & 0xffff,
-			Seq:  1,
-			Data: []byte("certscan"),
-		},
-	}
-
-	msgBytes, err := echo.Marshal(nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal echo request: %w", err)
-	}
-
-	if _, err := conn.WriteTo(msgBytes, dst); err != nil {
-		return nil, fmt.Errorf("failed to send echo request: %w", err)
-	}
-
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-
-	var responders []string
-	for {
-		buf := make([]byte, 1500)
-		n, peer, err := conn.ReadFrom(buf)
-		if err != nil {
-			break // timeout or done
-		}
-
-		msg, err := icmp.ParseMessage(58, buf[:n]) // 58 = ICMPv6
-		if err != nil {
-			continue
-		}
-
-		if msg.Type == ipv6.ICMPTypeEchoReply {
-			responders = append(responders, peer.(*net.UDPAddr).IP.String())
-		}
-	}
-
-	return responders, nil
 }
 
 // tlsHandshakeAndCollectWithTimeout performs a TLS handshake with the given cipher suites and collects certificates.
@@ -302,7 +234,7 @@ func tlsHandshakeAndCollectWithTimeout(ip, hostname string, port int, suites []u
 
 	tlsConfig := &utls.Config{
 		ServerName:         hostname,
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: true, // Allow all certs, including expired/invalid
 	}
 	uconn := utls.UClient(conn, tlsConfig, utls.HelloCustom)
 	spec := &utls.ClientHelloSpec{
@@ -312,7 +244,7 @@ func tlsHandshakeAndCollectWithTimeout(ip, hostname string, port int, suites []u
 			&utls.SupportedCurvesExtension{Curves: []utls.CurveID{utls.X25519, utls.CurveP256, utls.CurveP384}},
 			&utls.SupportedPointsExtension{SupportedPoints: []byte{0}}, // uncompressed
 			&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: signatureAlgs},
-			&utls.ALPNExtension{AlpnProtocols: []string{"h2", "http/1.1"}},
+			&utls.ALPNExtension{AlpnProtocols: []string{"h2", "http/1.1", "http/1.0", "h3", "spdy/3.1", "acme-tls/1"}},
 		},
 	}
 	if err := uconn.ApplyPreset(spec); err != nil {
@@ -327,8 +259,6 @@ func tlsHandshakeAndCollectWithTimeout(ip, hostname string, port int, suites []u
 	for _, cert := range state.PeerCertificates {
 		certs = append(certs, base64.StdEncoding.EncodeToString(cert.Raw))
 	}
-	// HTTP header collection is skipped for utls.UConn (not compatible with net/http)
-	var httpHeaders map[string][]string
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("no certs found")
 	}
@@ -338,7 +268,6 @@ func tlsHandshakeAndCollectWithTimeout(ip, hostname string, port int, suites []u
 		Hostname:      hostname,
 		HandshakeType: handshakeType,
 		Certificates:  certs,
-		HTTPHeaders:   httpHeaders,
 		Timestamp:     time.Now().Unix(),
 	}, nil
 }
@@ -393,9 +322,6 @@ var protocolHandlers = map[string]ProtocolHandler{
 func defaultTLSHandler(ip, hostname string, port int, proto string) bool {
 	webhookURL := shared.Config.WebhookURL
 	dialTimeout := time.Duration(shared.Config.DialTimeoutMs)
-	if dialTimeout <= 0 {
-		dialTimeout = DefaultDialTimeoutMs
-	}
 	dialTimeout = dialTimeout * time.Millisecond
 
 	var results []ScanResult
@@ -438,6 +364,12 @@ func defaultTLSHandler(ip, hostname string, port int, proto string) bool {
 		logutil.DebugLog("RSA handshake failed: %v", err)
 	}
 
+	// Filter certificates based on exclude_certs rules
+	excludeCerts := shared.Config.ExcludeCerts
+	for i := range results {
+		results[i].Certificates = filterCerts(decodeBase64Certs(results[i].Certificates), excludeCerts)
+	}
+
 	if len(results) > 0 {
 		sendToWebhook(results, webhookURL)
 	}
@@ -460,17 +392,11 @@ func ScanAndSendWithProtocol(ip, hostname string, ports []int, protocol string) 
 	smtpPorts := map[int]bool{25: true, 465: true, 587: true}
 
 	concurrency := shared.Config.ConcurrencyLimit
-	if concurrency <= 0 {
-		concurrency = DefaultConcurrency
-	}
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
 	// Use configured dial timeout
 	dialTimeout := time.Duration(shared.Config.DialTimeoutMs)
-	if dialTimeout <= 0 {
-		dialTimeout = DefaultDialTimeoutMs
-	}
 	dialTimeout = dialTimeout * time.Millisecond
 
 	for _, port := range ports {
@@ -525,4 +451,15 @@ func ScanAndSend(ip, host string, ports []int) {
 		}
 		ScanAndSendWithProtocol(ip, host, []int{port}, proto)
 	}
+}
+
+// Add helper:
+func decodeBase64Certs(b64certs []string) [][]byte {
+	var out [][]byte
+	for _, b64 := range b64certs {
+		if der, err := base64.StdEncoding.DecodeString(b64); err == nil {
+			out = append(out, der)
+		}
+	}
+	return out
 }

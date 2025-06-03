@@ -1,64 +1,79 @@
 # UltraPKI Certificate Discovery Agent Configuration
 #
-# This configuration file controls which hosts, IPs, and networks are scanned for TLS certificates.
+# This file controls which hosts, IPs, and networks are scanned for TLS certificates.
+#
+# --- MAIN OPTIONS ---
+# webhook_url: Endpoint to POST scan results (UltraPKI dashboard or your server)
+# ultrapki_token: (Optional) Auth token for UltraPKI cloud (leave empty for custom/local)
+# machine_id: (Optional) Custom agent ID (auto-generated if omitted)
+#
+# --- PERFORMANCE ---
+# concurrency_limit: Max concurrent scans (default: 8)
+# scan_interval_seconds: Full scan interval (seconds, >3600 recommended)
+# scan_throttle_delay_ms: Delay (ms) between scans
+#
+# --- NETWORK ---
+# enable_ipv4_discovery: Enable IPv4 neighbor discovery
+# enable_ipv6_discovery: Enable IPv6 neighbor discovery
+#
+# --- LOGGING ---
+# debug: Enable verbose debug logging
+#
+# --- TIMEOUTS (ms) ---
+# dial_timeout_ms: Network connection timeout
+# http_timeout_ms: HTTP request timeout
+# icmp_timeout_ms: ICMP (ping) timeout for IPv6 discovery
+# webhook_timeout_ms: Webhook submission timeout
+#
+# --- PORTS ---
+# ports: List of ports to scan for each host/IP (unless overridden)
 #
 # --- INCLUDE LIST ---
-# 'include_list' defines the scan targets. Each entry is an object with:
-#   - 'target': Hostname, IP address, host:port, or IPv4 CIDR range to scan.
-#   - 'protocol' (optional): One of [http1, h2, h3, smtp, imap, pop3, custom].
-#     * If 'protocol' is set and no port is given, scanner follows best practice for the given protocol.
-#     * If 'protocol' is set and a port is given, protocol rules are applied for that port.
-#     * If 'protocol' is omitted and the port is a typical web port, http1 is assumed.
-#   - IPv4 CIDRs (e.g. 10.0.0.0/24) are expanded to scan all IPs in the range.
-#   - IPv6 CIDRs are ignored for inclusion.
-#
-# Example include_list:
-#   - target: "192.168.1.10"          # All ports listed under 'ports:' will be tested on this IP
-#   - target: "mail.example.com:993"  # Only port 993 will be tested (commonly used for IMAP)
-#   - target: "10.0.0.0/28"           # All IPs in this CIDR range will be scanned on all defined ports
-#   - target: "web.example.com"       # Only HTTP/2 will be tested for this hostname
-#     protocol: "h2"
-#   - target: "203.0.113.5:5001"      # Only HTTP/1.1 will be tested on port 5001
-#     protocol: "http1"
+# include_list: Scan targets. Each entry:
+#   - target: Hostname, IP, host:port, or IPv4 CIDR
+#   - protocol: (Optional) [http1, h2, h3, smtp, imap, pop3, custom]
+#     * If protocol set, best practice port is used if port omitted
+#     * If protocol omitted, http1 is assumed for typical web ports
+#   - IPv4 CIDRs are expanded; IPv6 CIDRs are ignored
 #
 # --- EXCLUDE LIST ---
-# 'exclude_list' defines hosts, IPs, or networks to skip during scanning.
-#   - Accepts hostnames, IPs, IPv4 and IPv6 CIDRs.
-#   - Any IP or hostname (or resolved IP) in this list will not be scanned, even if included elsewhere.
+# exclude_list: Hosts, IPs, or networks to skip (hostname, IP, IPv4/IPv6 CIDR)
+#   - Any entry here is never scanned, even if included elsewhere
 #
-# Example exclude_list:
+# --- EXCLUDE CERTS ---
+# exclude_certs: List of rules to skip certificates by issuer or subject.
+#   - name: Label for this rule (for your reference)
+#   - issuer: Wildcard pattern to match certificate issuer (e.g. "*O=Ubiquiti*")
+#   - subject: (Optional) Wildcard pattern to match certificate subject
+#   - Any certificate matching a rule here will be ignored in scan results.
+# Example:
+# exclude_certs:
+#   - name: Ubiquiti Certs
+#     issuer: "*O=Ubiquiti*"
+#   - name: Synology Certs
+#     issuer: "*O=Synology*"
+#
+# --- EXAMPLES ---
+# include_list:
+#   - target: "192.168.1.10"
+#   - target: "mail.example.com:993"
+#   - target: "10.0.0.0/28"
+#   - target: "web.example.com"
+#     protocol: "h2"
+#   - target: "203.0.113.5:5001"
+#     protocol: "http1"
+# exclude_list:
 #   - 192.168.1.1
 #   - badhost.example.com
 #   - 10.0.0.0/28
 #   - 2001:db8::/32
-#
-# --- WEBHOOK & AGENT IDENTITY ---
-# 'webhook_url': The endpoint to which scan results are POSTed (UltraPKI dashboard or your own server).
-# 'ultrapki_token': (Optional) Authentication token for the UltraPKI dashboard or API.
-#   - Set this token if you are using the official UltraPKI cloud service.
-#   - The token is provided when you register your agent with UltraPKI.
-#   - Leave empty if you are using a custom or local webhook server.
-#   - Exec "curl -sSf https://cd.ultrapki.com/sh | sh" to fetch a token.
-# 'machine_id': (Optional) Set a custom agent ID. If omitted, a deterministic ID is generated from your system.
-#
-# --- SCAN SCHEDULE & PERFORMANCE ---
-# 'scan_interval_seconds': How often to perform a full scan (in seconds). For production, use >3600 (1 hour).
-# 'scan_throttle_delay_ms': Delay (ms) between individual scans to reduce network load.
-# 'concurrency_limit': Maximum number of concurrent scans (default: 8). Increase for faster scans, decrease to reduce network load.
-#
-# --- NETWORK & LOGGING ---
-# 'enable_ipv6_discovery': Enable/disable IPv6 neighbor discovery.
-# 'debug': Enable verbose debug logging.
-#
-# --- TIMEOUTS ---
-# 'dial_timeout_ms': Timeout for establishing network connections (in milliseconds).
-# 'http_timeout_ms': Timeout for HTTP requests (in milliseconds).
-# 'webhook_timeout_ms': Timeout for webhook result submissions (in milliseconds).
-#
-# --- PORTS ---
-# 'ports': List of ports to scan for each host/IP (unless overridden by protocol/port in include_list).
-#
-webhook_url: "http://localhost:8000/webhook" # Local test server (server/test-webhook-server.py)
+# exclude_certs:
+#   - name: Ubiquiti Certs
+#     issuer: "*O=Ubiquiti*"
+#   - name: Synology Certs
+#     issuer: "O=Synology*"
+
+webhook_url: "http://localhost:8000/webhook"
 #webhook_url: "https://cd.ultrapki.com/webhook"
 #ultrapki_token: ""
 #machine_id: "your-custom-machine-id"
@@ -67,8 +82,10 @@ concurrency_limit: 8
 dial_timeout_ms: 1000
 http_timeout_ms: 3000
 webhook_timeout_ms: 5000
+icmp_timeout_ms: 3000
 scan_interval_seconds: 3600
 scan_throttle_delay_ms: 50
+enable_ipv4_discovery: true
 enable_ipv6_discovery: false
 debug: true
 
@@ -93,3 +110,9 @@ exclude_list:
   - badhost.example.com
   - 10.0.0.0/28
   - 2001:db8::/32
+
+exclude_certs:
+  # - name: Ubiquiti Certs
+  #   issuer: "*O=Ubiquiti*"
+  # - name: Synology Certs
+  #   issuer: "O=Synology*"

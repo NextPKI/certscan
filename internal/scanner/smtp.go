@@ -100,6 +100,9 @@ func smtpProtocolHandler(ip, hostname string, port int) bool {
 	}
 	logutil.DebugLog("STARTTLS scan successful for %s:%d", ip, port)
 	logutil.DebugLog("Certificate for %s:%d: %w", ip, port, result)
+	// Filter certificates before sending to webhook
+	excludeCerts := shared.Config.ExcludeCerts
+	result.Certificates = filterCerts(decodeBase64Certs(result.Certificates), excludeCerts)
 	sendToWebhook([]ScanResult{*result}, shared.Config.WebhookURL)
 	return true
 }
