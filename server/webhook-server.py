@@ -21,7 +21,6 @@ Usage:
 
 """
 
-#!/usr/bin/env python3
 import http.server
 import socketserver
 import json
@@ -29,6 +28,7 @@ import base64
 import signal
 import threading
 import http.client
+import logging
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
@@ -36,7 +36,15 @@ from cryptography.x509.oid import ExtensionOID
 
 PORT = 8000
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
 class WebhookHandler(http.server.BaseHTTPRequestHandler):
+    """Handles incoming POST requests containing certificate scan results."""
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8')
@@ -47,70 +55,58 @@ class WebhookHandler(http.server.BaseHTTPRequestHandler):
             machine_id = payload.get("machine_id", "unknown-machine-id")
             data = payload.get("scan_results", [])
 
-            print("\n📥 Webhook received from %s/%s (%d certificates):" % (primary_ip, machine_id, len(data)))
+            logging.info(f"Webhook received from {primary_ip}/{machine_id} ({len(data)} certificates)")
 
             for entry in data:
                 try:
                     certificates = entry.get("certificates", [])
-                    print(f"🔒 Certificates for {entry['ip']}:{entry['port']}")
+                    logging.info(f"Certificates for {entry['ip']}:{entry['port']}")
                     # Display handshake_type, http_headers, and timestamp if present
                     if 'handshake_type' in entry:
-                        print(f"    ➤ Handshake:  {entry['handshake_type']}")
+                        logging.info(f"    Handshake:  {entry['handshake_type']}")
                     if 'timestamp' in entry:
-                        print(f"    ➤ Timestamp:  {entry['timestamp']}")
+                        logging.info(f"    Timestamp:  {entry['timestamp']}")
                     if 'http_headers' in entry and entry['http_headers']:
-                        print(f"    ➤ HTTP Headers:")
+                        logging.info(f"    HTTP Headers:")
                         for k, v in entry['http_headers'].items():
-                            print(f"        {k}: {v}")
+                            logging.info(f"        {k}: {v}")
                     for cert in certificates:
                         der = base64.b64decode(cert)
                         cert = x509.load_der_x509_certificate(der, backend=default_backend())
-
-                        # Uncomment the following lines if you want to skip CA certificates
-                        # This is optional and can be used to filter out CA certificates
-
                         try:
                             bc = cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS).value
                             if bc.ca:
                                 continue  # Skip CA certs
                         except x509.ExtensionNotFound:
                             pass  # If extension not found, assume it's a leaf cert
-
                         fingerprint = cert.fingerprint(hashes.SHA256()).hex()
                         issuer = cert.issuer.rfc4514_string()
                         serial = hex(cert.serial_number)
                         not_before = cert.not_valid_before_utc
                         not_after = cert.not_valid_after_utc
-
                         if 'hostname' in entry:
-                            print(f"    ➤ Hostname:   {entry['hostname']}")
-                        print(f"    ➤ Serial:     {serial}")
-                        print(f"    ➤ Fingerprint: {fingerprint[:64]}")
-                        print(f"    ➤ Valid From:  {not_before}")
-                        print(f"    ➤ Valid Until: {not_after}")
-                        print(f"    ➤ Issuer:      {issuer}")
-                        print("")
-
+                            logging.info(f"    Hostname:   {entry['hostname']}")
+                        logging.info(f"    Serial:     {serial}")
+                        logging.info(f"    Fingerprint: {fingerprint[:64]}")
+                        logging.info(f"    Valid From:  {not_before}")
+                        logging.info(f"    Valid Until: {not_after}")
+                        logging.info(f"    Issuer:      {issuer}")
                 except Exception as cert_err:
-                    print(f"⚠️  Error parsing cert from {entry.get('ip')}:{entry.get('port')}: {cert_err}")
-
+                    logging.warning(f"Error parsing cert from {entry.get('ip')}:{entry.get('port')}: {cert_err}")
         except Exception as parse_err:
-            print(f"❌ Invalid payload: {parse_err}")
-
+            logging.error(f"Invalid payload: {parse_err}")
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b'OK')
 
-
 class ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
-
 def start_server():
+    """Starts the HTTP server and handles graceful shutdown."""
     httpd = ReusableTCPServer(("", PORT), WebhookHandler)
-
     def shutdown_handler(sig, frame):
-        print("\n🛑 Shutting down server gracefully...")
+        logging.info("Shutting down server gracefully...")
         threading.Thread(target=httpd.shutdown).start()
         try:
             conn = http.client.HTTPConnection("localhost", PORT, timeout=1)
@@ -118,14 +114,12 @@ def start_server():
             conn.getresponse()
         except:
             pass  # Swallow errors if connection already closing
-
     signal.signal(signal.SIGINT, shutdown_handler)
-
-    print(f"🚀 Webhook server listening on port {PORT}")
+    logging.info(f"Webhook server listening on port {PORT}")
     try:
         httpd.serve_forever()
     finally:
-        print("✅ Server exited cleanly.")
+        logging.info("Server exited cleanly.")
 
 if __name__ == "__main__":
     start_server()

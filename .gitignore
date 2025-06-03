@@ -4,3 +4,4 @@
 certscan
 *.sh
 test-*
+**/venv

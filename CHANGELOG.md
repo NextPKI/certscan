@@ -1,5 +1,10 @@
 # Changes
 
+### 06/03/2025
+
+- Introduced webhook-proxy.py: a local HTTP proxy server that receives webhook calls from agents and forwards them to the UltraPKI Dashboard.
+
+
 ### 06/01/2025
 
 - Unified protocol handling via ScanAndSendWithProtocol and protocolHandlers
