@@ -15,7 +15,7 @@ A simple HTTP proxy server that receives webhook calls from local agents and for
   python3 webhook-proxy.py
   ```
 
-## test-webhook-server.py
+## webhook-server.py
 A minimal HTTP server for testing webhook integrations locally.
 
 - **Purpose:** Simulates a webhook endpoint to receive and log incoming requests for development and testing.
@@ -24,10 +24,10 @@ A minimal HTTP server for testing webhook integrations locally.
   - Useful for debugging agent integrations.
 - **Usage:**
   ```sh
-  python3 test-webhook-server.py
+  python3 webhook-server.py
   ```
 
-## test-tls-server.sh
+## tls-server.sh
 A shell script to start a simple HTTPS server for local testing.
 
 - **Purpose:** Provides a TLS-enabled endpoint for testing webhook delivery over HTTPS.
@@ -36,7 +36,7 @@ A shell script to start a simple HTTPS server for local testing.
   - Automatically generates `cert.pem` and `key.pem`.
 - **Usage:**
   ```sh
-  ./test-tls-server.sh
+  ./tls-server.sh
   ```
 
 ---
