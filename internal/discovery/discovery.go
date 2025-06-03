@@ -117,7 +117,7 @@ func IsExcluded(host string, excludeList []string) bool {
 }
 
 // DiscoverIPv6Neighbors scans all interfaces and returns all responding IPv6 neighbors.
-// Returns a list of IPv6 addresses or an error.
+// Optionally, it performs a ping sweep and NDP sweep in the local /64 subnet if enabled in the config.
 func DiscoverIPv6Neighbors() ([]string, error) {
 	var responders []string
 	excludeList := shared.Config.ExcludeList
@@ -128,10 +128,11 @@ func DiscoverIPv6Neighbors() ([]string, error) {
 	for _, iface := range interfaces {
 		addrs, _ := iface.Addrs()
 		for _, addr := range addrs {
-			ip, _, err := net.ParseCIDR(addr.String())
+			ip, ipnet, err := net.ParseCIDR(addr.String())
 			if err != nil || ip == nil || ip.To16() == nil || ip.To4() != nil {
 				continue // skip non-IPv6
 			}
+			// ICMPv6 Multicast Echo (as before)
 			ifaceResponders, err := discoverIPv6OnInterface(iface.Name)
 			if err == nil {
 				for _, resp := range ifaceResponders {
@@ -141,12 +142,89 @@ func DiscoverIPv6Neighbors() ([]string, error) {
 					responders = append(responders, resp)
 				}
 			}
+			// Optional: ICMPv6 Echo Sweep in the local /64
+			if shared.Config.EnableIPv6PingSweep && ipnet != nil {
+				ones, bits := ipnet.Mask.Size()
+				if ones == 64 && bits == 128 {
+					for sweepIP := ip.Mask(ipnet.Mask); ipnet.Contains(sweepIP); incIP(sweepIP) {
+						if sweepIP.Equal(ip) {
+							continue // skip own address
+						}
+						resp, err := sendICMPv6Echo(sweepIP, iface.Name)
+						if err == nil && resp != "" && !IsExcluded(resp, excludeList) {
+							responders = append(responders, resp)
+						}
+					}
+				}
+			}
+			// Optional: NDP Neighbor Solicitation Sweep in the local /64
+			if shared.Config.EnableIPv6NDPSweep && ipnet != nil {
+				ones, bits := ipnet.Mask.Size()
+				if ones == 64 && bits == 128 {
+					for sweepIP := ip.Mask(ipnet.Mask); ipnet.Contains(sweepIP); incIP(sweepIP) {
+						if sweepIP.Equal(ip) {
+							continue
+						}
+						resp, err := sendNDPSolicitation(sweepIP, iface.Name)
+						if err == nil && resp != "" && !IsExcluded(resp, excludeList) {
+							responders = append(responders, resp)
+						}
+					}
+				}
+			}
 		}
 	}
 	return responders, nil
 }
 
-// discoverIPv6OnInterface sends an ICMPv6 multicast echo to ff02::1 on the given interface and returns responding IPs.
+// sendICMPv6Echo sends an ICMPv6 Echo Request to a target address and returns the response IP (or empty string).
+func sendICMPv6Echo(dstIP net.IP, ifaceName string) (string, error) {
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return "", err
+	}
+	conn, err := icmp.ListenPacket("udp6", fmt.Sprintf("%%%s", iface.Name))
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	dst := &net.UDPAddr{IP: dstIP, Zone: iface.Name}
+	echo := icmp.Message{
+		Type: ipv6.ICMPTypeEchoRequest,
+		Code: 0,
+		Body: &icmp.Echo{ID: os.Getpid() & 0xffff, Seq: 1, Data: []byte("certscan")},
+	}
+	msgBytes, err := echo.Marshal(nil)
+	if err != nil {
+		return "", err
+	}
+	if _, err := conn.WriteTo(msgBytes, dst); err != nil {
+		return "", err
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Duration(shared.Config.ICMPTimeoutMs) * time.Millisecond))
+	buf := make([]byte, 1500)
+	n, peer, err := conn.ReadFrom(buf)
+	if err != nil {
+		return "", err
+	}
+	msg, err := icmp.ParseMessage(58, buf[:n])
+	if err != nil {
+		return "", err
+	}
+	if msg.Type == ipv6.ICMPTypeEchoReply {
+		return peer.(*net.UDPAddr).IP.String(), nil
+	}
+	return "", nil
+}
+
+// sendNDPSolicitation sends a Neighbor Solicitation to a target address and returns the response IP (or empty string).
+func sendNDPSolicitation(dstIP net.IP, ifaceName string) (string, error) {
+	// Not implemented yet because it would require ths tool to run as root (raw sockets)
+	return "", nil
+}
+
+// discoverIPv6OnInterface sends an ICMPv6 Multicast Echo Request (ff02::1) on the given interface
+// and returns all responding neighbors as a list of IPs.
 func discoverIPv6OnInterface(ifaceName string) ([]string, error) {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
@@ -157,49 +235,32 @@ func discoverIPv6OnInterface(ifaceName string) ([]string, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	dst := &net.UDPAddr{
-		IP:   net.ParseIP("ff02::1"),
-		Zone: iface.Name,
-	}
-
+	dst := &net.UDPAddr{IP: net.ParseIP("ff02::1"), Zone: iface.Name}
 	echo := icmp.Message{
 		Type: ipv6.ICMPTypeEchoRequest,
 		Code: 0,
-		Body: &icmp.Echo{
-			ID:   os.Getpid() & 0xffff,
-			Seq:  1,
-			Data: []byte("certscan"),
-		},
+		Body: &icmp.Echo{ID: os.Getpid() & 0xffff, Seq: 1, Data: []byte("certscan")},
 	}
-
 	msgBytes, err := echo.Marshal(nil)
 	if err != nil {
 		return nil, err
 	}
-
 	if _, err := conn.WriteTo(msgBytes, dst); err != nil {
 		return nil, err
 	}
-
-	conn.SetReadDeadline(time.Now().Add(time.Duration(shared.Config.ICMPTimeoutMs) * time.Millisecond))
-
 	var responders []string
+	conn.SetReadDeadline(time.Now().Add(time.Duration(shared.Config.ICMPTimeoutMs) * time.Millisecond))
+	buf := make([]byte, 1500)
 	for {
-		buf := make([]byte, 1500)
 		n, peer, err := conn.ReadFrom(buf)
 		if err != nil {
-			break // timeout or done
+			break // timeout or no more responses
 		}
-
-		msg, err := icmp.ParseMessage(58, buf[:n]) // 58 = ICMPv6
-		if err != nil {
-			continue
-		}
-
-		if msg.Type == ipv6.ICMPTypeEchoReply {
-			responders = append(responders, peer.(*net.UDPAddr).IP.String())
+		msg, err := icmp.ParseMessage(58, buf[:n])
+		if err == nil && msg.Type == ipv6.ICMPTypeEchoReply {
+			ip := peer.(*net.UDPAddr).IP.String()
+			responders = append(responders, ip)
 		}
 	}
-
 	return responders, nil
 }

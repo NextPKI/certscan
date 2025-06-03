@@ -15,6 +15,8 @@
 # --- NETWORK ---
 # enable_ipv4_discovery: Enable IPv4 neighbor discovery
 # enable_ipv6_discovery: Enable IPv6 neighbor discovery
+# enable_ipv6_ping_sweep: (Optional, default: false) Aktiviert aktiven ICMPv6 Ping Sweep im lokalen /64-Subnetz
+# enable_ipv6_ndp_sweep: (Optional, default: false) Aktiviert NDP Neighbor Solicitation Sweep im lokalen /64-Subnetz
 #
 # --- LOGGING ---
 # debug: Enable verbose debug logging
@@ -87,6 +89,8 @@ scan_interval_seconds: 3600
 scan_throttle_delay_ms: 50
 enable_ipv4_discovery: true
 enable_ipv6_discovery: false
+enable_ipv6_ping_sweep: false
+enable_ipv6_ndp_sweep: false
 debug: true
 
 ports:

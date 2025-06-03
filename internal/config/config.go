@@ -45,6 +45,8 @@ type Config struct {
 	ICMPTimeoutMs       int               `yaml:"icmp_timeout_ms"`
 	HTTPTimeoutMs       int               `yaml:"http_timeout_ms"`
 	WebhookTimeoutMs    int               `yaml:"webhook_timeout_ms"`
+	EnableIPv6PingSweep bool              `yaml:"enable_ipv6_ping_sweep"`
+	EnableIPv6NDPSweep  bool              `yaml:"enable_ipv6_ndp_sweep"`
 }
 
 const (
@@ -108,6 +110,13 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.ConcurrencyLimit <= 0 {
 		cfg.ConcurrencyLimit = DefaultConcurrency
+	}
+	// Ensure EnableIPv6PingSweep is false if not set in config (default behavior)
+	if _, ok := raw["enable_ipv6_ping_sweep"]; !ok {
+		cfg.EnableIPv6PingSweep = false
+	}
+	if _, ok := raw["enable_ipv6_ndp_sweep"]; !ok {
+		cfg.EnableIPv6NDPSweep = false
 	}
 	return &cfg, nil
 }
