@@ -20,6 +20,8 @@ For every discovered service, the agent extracts TLS certificate metadata (issue
 * Configurable debug logging
 * Graceful shutdown via SIGINT or SIGTERM
 * Native systemd service support
+* Fine-grained exclusion of hosts, networks, and certificates (by issuer/subject)
+* Centralized and configurable timeouts for all network operations
 
 ## Configuration
 
@@ -32,18 +34,20 @@ webhook_url: "http://localhost:8000/webhook"
 
 debug: true
 dial_timeout_ms: 1000
+icmp_timeout_ms: 3000
+http_timeout_ms: 3000
+webhook_timeout_ms: 5000
+enable_ipv4_discovery: true
 enable_ipv6_discovery: false
 concurrency_limit: 8
-http_timeout_ms: 3000
+scan_interval_seconds: 3600
+scan_throttle_delay_ms: 50
 ports:
   - 443   # HTTPS
   - 465   # SMTPS (legacy)
   - 587   # SMTP (submission)
   - 993   # IMAPS
   - 995   # POP3S
-scan_interval_seconds: 3600
-scan_throttle_delay_ms: 50
-webhook_timeout_ms: 5000
 
 include_list:
   - target: "192.168.1.10"
@@ -59,14 +63,20 @@ exclude_list:
   - badhost.example.com
   - 10.0.0.0/28
   - 2001:db8::/32
+exclude_certs:
+  - name: Ubiquiti Certs
+    issuer: "*O=Ubiquiti*"
+  - name: Synology Certs
+    issuer: "O=Synology*"
 ```
 
-* `concurrency_limit`, `dial_timeout_ms`, `http_timeout_ms`, and `webhook_timeout_ms` are now configurable for performance and reliability.
-* All config values are now sorted for clarity (except include_list and exclude_list, which remain grouped at the end).
+* `concurrency_limit`, `dial_timeout_ms`, `icmp_timeout_ms`, `http_timeout_ms`, and `webhook_timeout_ms` are now configurable for performance and reliability.
+* All config values are now grouped and documented for clarity.
 * `include_list` supports hostnames, IPs, host:port, and IPv4 CIDR ranges. Optionally, set `protocol` (http1, h2, h3, smtp, imap, pop3, custom) per entry.
 * If `protocol` is set and a port is given, protocol rules are applied for that port.
 * If `protocol` is omitted and the port is a typical web port, http1 is assumed.
 * `exclude_list` supports hostnames, IPs, and IPv4/IPv6 CIDRs. Any match is skipped, even if included elsewhere.
+* `exclude_certs` allows you to skip certificates by issuer or subject using wildcards.
 
 ## Building the Tool
 
@@ -116,7 +126,9 @@ Group=certscan
 WantedBy=multi-user.target
 ```
 
-## Python Webhook Server (for Testing)
+## Webhook Proxy and Testing
+
+A local HTTP proxy for webhook delivery is provided as `webhook-proxy.py`. This allows you to forward agent results to the UltraPKI Dashboard or your own endpoint for testing and debugging.
 
 A basic testing server is provided at `server/test-webhook-server.py`.
 It parses incoming POST requests containing base64-encoded DER certificates and displays metadata such as issuer, validity, and fingerprint.
