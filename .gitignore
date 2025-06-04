@@ -2,6 +2,7 @@
 .vscode
 *.pem
 certscan
+certscan-*
 *.sh
 test-*
 **/venv
