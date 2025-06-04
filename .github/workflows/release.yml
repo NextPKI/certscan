@@ -1,0 +1,46 @@
+name: Build and Release Binaries
+
+on:
+    push:
+        tags:
+            - 'v*'
+
+jobs:
+    build:
+        name: Build binaries for Linux, Windows, and macOS
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Go
+              uses: actions/setup-go@v5
+              with:
+                  go-version: '1.22'
+
+            - name: Build Linux amd64
+              run: |
+                  GOOS=linux GOARCH=amd64 go build -o certscan-linux-amd64 ./cmd
+
+            - name: Build Windows amd64
+              run: |
+                  GOOS=windows GOARCH=amd64 go build -o certscan-windows-amd64.exe ./cmd
+
+            - name: Build macOS amd64
+              run: |
+                  GOOS=darwin GOARCH=amd64 go build -o certscan-darwin-amd64 ./cmd
+
+            - name: Build macOS arm64
+              run: |
+                  GOOS=darwin GOARCH=arm64 go build -o certscan-darwin-arm64 ./cmd
+
+            - name: Upload binaries to release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: |
+                      certscan-linux-amd64
+                      certscan-windows-amd64.exe
+                      certscan-darwin-amd64
+                      certscan-darwin-arm64
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
