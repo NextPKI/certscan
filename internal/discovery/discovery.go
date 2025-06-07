@@ -219,7 +219,7 @@ func sendICMPv6Echo(dstIP net.IP, ifaceName string) (string, error) {
 
 // sendNDPSolicitation sends a Neighbor Solicitation to a target address and returns the response IP (or empty string).
 func sendNDPSolicitation(dstIP net.IP, ifaceName string) (string, error) {
-	// Not implemented yet because it would require ths tool to run as root (raw sockets)
+	// Not implemented yet because it would require this tool to run as root (raw sockets)
 	return "", nil
 }
 
