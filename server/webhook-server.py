@@ -17,7 +17,7 @@ Dependencies:
 - cryptography
 
 Usage:
-    python3 test-webhook-server.py
+    python3 server/webhook-server.py
 
 """
 

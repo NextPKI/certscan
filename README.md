@@ -130,7 +130,7 @@ WantedBy=multi-user.target
 
 A local HTTP proxy for webhook delivery is provided as `webhook-proxy.py`. This allows you to forward agent results to the UltraPKI Dashboard or your own endpoint for testing and debugging.
 
-A basic testing server is provided at `server/test-webhook-server.py`.
+A basic testing server is provided at `server/webhook-server.py`.
 It parses incoming POST requests containing base64-encoded DER certificates and displays metadata such as issuer, validity, and fingerprint.
 Supports multiple IPs per hostname. If you add new fields to the webhook payload (e.g., protocol, HTTP headers), update the script to print them.
 
