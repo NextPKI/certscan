@@ -1,10 +1,10 @@
-# UltraPKI Certificate Discovery Agent Configuration
+# NextPKI Certificate Discovery Agent Configuration
 #
 # This file controls which hosts, IPs, and networks are scanned for TLS certificates.
 #
 # --- MAIN OPTIONS ---
-# webhook_url: Endpoint to POST scan results (UltraPKI dashboard or your server)
-# ultrapki_token: (Optional) Auth token for UltraPKI cloud (leave empty for custom/local)
+# webhook_url: Endpoint to POST scan results (NextPKI dashboard or your server)
+# nextpki_token: (Optional) Auth token for NextPKI cloud (leave empty for custom/local)
 # machine_id: (Optional) Custom agent ID (auto-generated if omitted)
 #
 # --- PERFORMANCE ---
@@ -76,8 +76,8 @@
 #     issuer: "O=Synology*"
 
 webhook_url: "http://localhost:8000/webhook"
-#webhook_url: "https://cd.ultrapki.com/webhook"
-#ultrapki_token: ""
+#webhook_url: "https://cd.nextpki.com/webhook"
+#NextPKI_token: ""
 #machine_id: "your-custom-machine-id"
 
 concurrency_limit: 8
@@ -119,4 +119,4 @@ exclude_certs:
   # - name: Ubiquiti Certs
   #   issuer: "*O=Ubiquiti*"
   # - name: Synology Certs
-  #   issuer: "O=Synology*"
+  #   issuer: "*O=Synology*"
