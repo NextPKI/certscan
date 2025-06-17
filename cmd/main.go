@@ -25,11 +25,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nexpki/certscan/internal/config"
-	"github.com/nexpki/certscan/internal/discovery"
-	"github.com/nexpki/certscan/internal/logutil"
-	"github.com/nexpki/certscan/internal/scanner"
-	"github.com/nexpki/certscan/internal/shared"
+	"github.com/nextpki/certscan/internal/config"
+	"github.com/nextpki/certscan/internal/discovery"
+	"github.com/nextpki/certscan/internal/logutil"
+	"github.com/nextpki/certscan/internal/scanner"
+	"github.com/nextpki/certscan/internal/shared"
 )
 
 // Helper to flatten IncludeList to []string for isExplicitlyIncluded
