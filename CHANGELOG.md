@@ -1,5 +1,9 @@
 # Changes
 
+### 06/18/2025
+
+- To address a trademark request, we have renamed our project from ultraPKI to nextPKI. You can now find us at github.com/nextpki 🤡
+
 ### 06/03/2025
 
 - Introduced webhook-proxy.py: a local HTTP proxy server that receives webhook calls from agents and forwards them to the NextPKI Dashboard.
