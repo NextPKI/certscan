@@ -1,4 +1,4 @@
-// smtp.go provides the SMTP STARTTLS scan logic and protocol handler for UltraPKI.
+// smtp.go provides the SMTP STARTTLS scan logic and protocol handler for NextPKI.
 // It implements certificate extraction for SMTP services supporting STARTTLS.
 // smtp.go: SMTP STARTTLS scan logic and handler
 package scanner
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ultrapki/certscan/internal/logutil"
-	"github.com/ultrapki/certscan/internal/shared"
+	"github.com/nextpki/certscan/internal/logutil"
+	"github.com/nextpki/certscan/internal/shared"
 )
 
 // scanSMTPStartTLS connects to an SMTP server, upgrades to TLS using STARTTLS, and extracts certificates.

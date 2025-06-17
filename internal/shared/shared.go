@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ultrapki/certscan/internal/config"
+	"github.com/nextpki/certscan/internal/config"
 )
 
 var Config *config.Config

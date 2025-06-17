@@ -1,5 +1,5 @@
 [Unit]
-Description=UltraPKI Certificate Discovery Daemon
+Description=NextPKI Certificate Discovery Daemon
 After=network.target
 
 [Service]

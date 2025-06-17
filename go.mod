@@ -1,4 +1,4 @@
-module github.com/ultrapki/certscan
+module github.com/nextpki/certscan
 
 go 1.24
 

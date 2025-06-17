@@ -29,7 +29,7 @@ type ExcludeCertRule struct {
 // It includes webhook settings, scan intervals, network options, and more.
 type Config struct {
 	WebhookURL          string            `yaml:"webhook_url"`
-	Token               string            `yaml:"ultrapki_token,omitempty"`
+	Token               string            `yaml:"nextpki_token,omitempty"`
 	ScanIntervalSeconds int               `yaml:"scan_interval_seconds"`
 	ScanThrottleDelayMs int               `yaml:"scan_throttle_delay_ms"`
 	EnableIPv6Discovery bool              `yaml:"enable_ipv6_discovery"`

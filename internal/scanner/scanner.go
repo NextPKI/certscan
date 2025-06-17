@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nextpki/certscan/internal/logutil"
+	"github.com/nextpki/certscan/internal/shared"
+	"github.com/nextpki/internal/config"
 	utls "github.com/refraction-networking/utls"
-	"github.com/ultrapki/certscan/internal/config"
-	"github.com/ultrapki/certscan/internal/logutil"
-	"github.com/ultrapki/certscan/internal/shared"
 )
 
 // AllowedProtocols lists all supported protocol names for scanning.

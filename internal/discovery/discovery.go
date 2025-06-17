@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ultrapki/certscan/internal/shared"
+	"github.com/nextpki/certscan/internal/shared"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv6"
 )

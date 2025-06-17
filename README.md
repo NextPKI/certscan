@@ -1,4 +1,4 @@
-# UltraPKI Certificate Discovery
+# NextPKI Certificate Discovery
 
 A lightweight, daemon-capable certificate discovery and reporting agent written in Go and Python.
 
@@ -29,7 +29,7 @@ For every discovered service, the agent extracts TLS certificate metadata (issue
 
 ```yaml
 webhook_url: "http://localhost:8000/webhook"
-#ultrapki_token: "" # Optional: UltraPKI dashboard token
+#nextpki_token: "" # Optional: NextPKI dashboard token
 #machine_id: "your-custom-machine-id"
 
 debug: true
@@ -67,7 +67,7 @@ exclude_certs:
   - name: Ubiquiti Certs
     issuer: "*O=Ubiquiti*"
   - name: Synology Certs
-    issuer: "O=Synology*"
+    issuer: "*O=Synology*"
 ```
 
 * `concurrency_limit`, `dial_timeout_ms`, `icmp_timeout_ms`, `http_timeout_ms`, and `webhook_timeout_ms` are now configurable for performance and reliability.
@@ -128,7 +128,7 @@ WantedBy=multi-user.target
 
 ## Webhook Proxy and Testing
 
-A local HTTP proxy for webhook delivery is provided as `webhook-proxy.py`. This allows you to forward agent results to the UltraPKI Dashboard or your own endpoint for testing and debugging.
+A local HTTP proxy for webhook delivery is provided as `webhook-proxy.py`. This allows you to forward agent results to the NextPKI Dashboard or your own endpoint for testing and debugging.
 
 A basic testing server is provided at `server/webhook-server.py`.
 It parses incoming POST requests containing base64-encoded DER certificates and displays metadata such as issuer, validity, and fingerprint.
