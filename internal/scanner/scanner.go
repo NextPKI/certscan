@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nextpki/certscan/internal/config"
 	"github.com/nextpki/certscan/internal/logutil"
 	"github.com/nextpki/certscan/internal/shared"
-	"github.com/nextpki/internal/config"
 	utls "github.com/refraction-networking/utls"
 )
 
