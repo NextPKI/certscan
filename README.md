@@ -1,5 +1,28 @@
 # NextPKI Certificate Discovery
 
+> **Superseded. This agent no longer reports to the NextPKI platform.**
+>
+> certscan was the first-generation discovery agent. It has been replaced by a
+> Rust rewrite that runs as the NextPKI sensor, and the two speak different
+> protocols:
+>
+> | | certscan (this repo) | NextPKI sensor |
+> |---|---|---|
+> | Transport | unauthenticated JSON webhook POST | gRPC over mTLS, or REST via `POST /v1/sensors/ingest` behind an mTLS-terminating edge |
+> | Receiver | the Python server bundled in [`server/`](server/) | the NextPKI platform |
+> | Enrollment | static token in `config.yaml` | one-click bootstrap, per-sensor client certificate |
+>
+> The NextPKI platform no longer implements a webhook ingest endpoint, so
+> **pointing this agent at NextPKI will not work.** It still runs standalone
+> against its own bundled webhook receiver, which is how it was originally
+> deployed. Adapting it to the current API would mean replacing the transport,
+> the enrollment and the payload format, which is effectively what the Rust
+> rewrite already did.
+>
+> This repository stays public and GPL-3.0 as a reference, but it is not
+> maintained and receives no fixes. For the current agent, see
+> https://nextpki.com.
+
 A lightweight, daemon-capable certificate discovery and reporting agent written in Go and Python.
 
 This tool acts as an **auto-discovery agent** that scans your entire local IPv4 and (optionally) IPv6 network for TLS-enabled services. It automatically identifies neighbors on the network and inspects known ports for certificates. In addition to dynamic discovery, it also supports scanning explicitly configured static IP addresses, hostnames, and custom port/protocol combinations.
