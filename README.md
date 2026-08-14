@@ -1,6 +1,6 @@
 # NextPKI Certificate Discovery
 
-> **Superseded. This agent no longer reports to the NextPKI platform.**
+> **Archived and superseded. Do not run this agent.**
 >
 > certscan was the first-generation discovery agent. It has been replaced by a
 > Rust rewrite that runs as the NextPKI sensor, and the two speak different
@@ -19,9 +19,12 @@
 > the enrollment and the payload format, which is effectively what the Rust
 > rewrite already did.
 >
-> This repository stays public and GPL-3.0 as a reference, but it is not
-> maintained and receives no fixes. For the current agent, see
-> https://nextpki.com.
+> This repository is archived and read-only. It stays public and GPL-3.0 as a
+> historical reference, but it receives no fixes, **including for known
+> vulnerabilities in its dependencies**: the pinned `golang.org/x/crypto` and
+> `golang.org/x/net` versions carry published CVEs, and the fixed releases
+> require a newer Go toolchain than this module declares. Read the code, do not
+> deploy it. For the current agent, see https://nextpki.com.
 
 A lightweight, daemon-capable certificate discovery and reporting agent written in Go and Python.
 
